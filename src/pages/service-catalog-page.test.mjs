@@ -1,0 +1,72 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const resourceGovernanceRoutesSource = readFileSync(resolve(process.cwd(), 'src/modules/ResourceGovernance/routes.tsx'), 'utf8')
+const sharingGovernanceRoutesSource = readFileSync(resolve(process.cwd(), 'src/modules/SharingGovernance/routes.tsx'), 'utf8')
+const serviceLayoutSource = readFileSync(resolve(process.cwd(), 'src/layouts/service-layout.tsx'), 'utf8')
+const catalogPageSource = readFileSync(resolve(process.cwd(), 'src/pages/catalog-page.tsx'), 'utf8')
+const navigationSource = readFileSync(resolve(process.cwd(), 'src/lib/nocobase-portal-navigation.ts'), 'utf8')
+const dataSourceCatalogPageSource = readFileSync(resolve(process.cwd(), 'src/pages/data-source-catalog-page.tsx'), 'utf8')
+const serviceCatalogPageSource = readFileSync(resolve(process.cwd(), 'src/pages/service-catalog-page.tsx'), 'utf8')
+const applicationSectionSource = readFileSync(resolve(process.cwd(), 'src/components/portal-application-catalog-section.tsx'), 'utf8')
+const homePageSource = readFileSync(resolve(process.cwd(), 'src/pages/home-page.tsx'), 'utf8')
+const homePreviewShellSource = readFileSync(resolve(process.cwd(), 'src/pages/home-preview-shell.tsx'), 'utf8')
+
+test('数据源与数据API服务目录保留源码兼容路由，但顶部导航收敛到安全管控', () => {
+  assert.match(resourceGovernanceRoutesSource, /const DataSourceCatalogPage = lazy\(async \(\) => \(\{ default: \(await import\('\.\.\/\.\.\/pages\/data-source-catalog-page'\)\)\.DataSourceCatalogPage \}\)\)/)
+  assert.match(resourceGovernanceRoutesSource, /<Route path="\/data-source-catalog" element={<DataSourceCatalogPage \/>} \/>/)
+  assert.match(sharingGovernanceRoutesSource, /const ServiceCatalogPage = lazy\(async \(\) => \(\{ default: \(await import\('\.\.\/\.\.\/pages\/service-catalog-page'\)\)\.ServiceCatalogPage \}\)\)/)
+  assert.match(sharingGovernanceRoutesSource, /<Route path="\/service-catalog" element={<ServiceCatalogPage \/>} \/>/)
+  assert.match(serviceLayoutSource, /primaryNavigations\.map\(\(item\) => \(/)
+  assert.doesNotMatch(navigationSource, /title: '数据API服务'[\s\S]*target: '\/service-catalog'/)
+  assert.match(navigationSource, /title: '安全态势看板'[\s\S]*target: '\/security-governance\/dashboard'/)
+  assert.doesNotMatch(navigationSource, /title: '数据安全管控'[\s\S]*target: '\/security-governance\/dashboard'/)
+  assert.match(dataSourceCatalogPageSource, /return <CatalogPage forceView="data-source" \/>/)
+})
+
+test('数据API服务页面默认只展示数据API目录，并兼容旧场景应用链接跳转到供需对接页', () => {
+  assert.match(serviceCatalogPageSource, /import \{ Navigate, useLocation, useSearchParams \} from 'react-router-dom'/)
+  assert.match(serviceCatalogPageSource, /import \{ appendEmbedToPath, readEmbedMode \} from '\.\.\/lib\/embed-mode'/)
+  assert.match(serviceCatalogPageSource, /const requestedTab = \(searchParams\.get\('tab'\) \?\? ''\)\.trim\(\)/)
+  assert.match(serviceCatalogPageSource, /if \(requestedTab === 'application'\) \{/)
+  assert.match(serviceCatalogPageSource, /return <Navigate to=\{appendEmbedToPath\(`\/demand\?\$\{next\.toString\(\)\}`,\s*isEmbedMode\)\} replace \/>/)
+  assert.match(serviceCatalogPageSource, /return <CatalogPage forceView="service" \/>/)
+  assert.doesNotMatch(serviceCatalogPageSource, /SERVICE_CATALOG_TABS/)
+  assert.doesNotMatch(serviceCatalogPageSource, /PortalApplicationCatalogSection/)
+  assert.match(applicationSectionSource, /export function PortalApplicationCatalogSection\(\)/)
+  assert.match(applicationSectionSource, /title="应用节点总数"/)
+  assert.match(applicationSectionSource, /title="一级分类数量"/)
+  assert.match(applicationSectionSource, /title="叶子应用数量"/)
+  assert.match(applicationSectionSource, /title="当前展示数量"/)
+  assert.match(applicationSectionSource, /新建场景应用/)
+})
+
+test('数据API服务入口从首页和预览页指向独立服务清单页面', () => {
+  assert.match(homePageSource, /title: '数据API服务'[\s\S]*?to: '\/service-catalog'/)
+  assert.match(homePreviewShellSource, /title: '数据API服务'[\s\S]*?to: '\/service-catalog'/)
+})
+
+test('目录页共享 tab 元数据切换数据资源、数据产品、文档资源、空间资源、数据源，并将数据API服务移出 tab 条', () => {
+  assert.match(catalogPageSource, /const \{ navigations, catalogTabs \} = usePortalNavigations\(!isBootstrapping, ALL_PRODUCT_MODULE_IDS\)/)
+  assert.match(catalogPageSource, /const hasCatalogNavigation = navigations\.some\(\(item\) => item\.target === '\/catalog'\)/)
+  assert.match(catalogPageSource, /const resolvedCatalogTabs = catalogTabs\.length > 0 \|\| hasCatalogNavigation \? catalogTabs : getDefaultCatalogTabs\(\)/)
+  assert.match(navigationSource, /const DEFAULT_CATALOG_TABS: PortalCatalogTabMeta\[] = \[/)
+  assert.match(navigationSource, /id: 'data-resource'[\s\S]*href: '\/catalog'/)
+  assert.match(navigationSource, /id: 'data-product'[\s\S]*href: '\/data-products'[\s\S]*visibleInTabs: true/)
+  assert.match(navigationSource, /function ensureDataProductCatalogTab\(tabs: PortalCatalogTabMeta\[]\)/)
+  assert.match(navigationSource, /id: 'document'[\s\S]*href: '\/documents'[\s\S]*visibleInTabs: true/)
+  assert.match(navigationSource, /id: 'spatial-resource'[\s\S]*href: '\/catalog\?view=spatial-resource'[\s\S]*visibleInTabs: true/)
+  assert.match(navigationSource, /id: 'data-source'[\s\S]*href: '\/data-source-catalog'[\s\S]*visibleInTabs: true/)
+  assert.match(navigationSource, /id: 'service'[\s\S]*href: '\/service-catalog'[\s\S]*visibleInTabs: false/)
+  assert.match(catalogPageSource, /const tabbedCatalogViews = resolvedCatalogTabs\.filter\(\(tab\) => tab\.visibleInTabs\)/)
+  assert.match(catalogPageSource, /tabbedCatalogViews\.map\(\(tab\) => \{/)
+  assert.match(catalogPageSource, /const activeCatalogView: CatalogViewId = forceView \|\| resolveCatalogView\(legacyView\)/)
+  assert.match(catalogPageSource, /activeCatalogView === 'document'[\s\S]*?<KnowledgeDocumentsPage[\s\S]*?\/>/)
+  assert.match(catalogPageSource, /placeholder=\{activeViewMeta\.searchPlaceholder\}/)
+  assert.match(catalogPageSource, /title=\{activeViewMeta\.categoryTitle\}/)
+  assert.match(catalogPageSource, /\{activeViewMeta\.categoryTitle\}：\{categoryTreeFlat\.get\(activeCategoryNodeId\)\?\.pathLabel \?\? activeCategoryNodeId\}/)
+  assert.match(catalogPageSource, /\{activeViewMeta\.resultLabel\}/)
+  assert.match(catalogPageSource, /activeViewMeta\.emptyStateLabel/)
+})

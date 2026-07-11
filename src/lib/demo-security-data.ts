@@ -1,0 +1,433 @@
+import { buildCatalogCategoryTree, type DomainCategoryRecord } from './catalog-category-tree'
+import type { PortalData, CatalogItem } from './nocobase-portal-data'
+import type { SecurityGovernancePolicyRecord } from './nocobase-security-governance'
+
+const env = (import.meta as { env?: Record<string, string | boolean | undefined> }).env ?? {}
+
+export function isDemoFallbackEnabled() {
+  const value = String(env.VITE_PORTAL_DEMO_FALLBACK_ENABLED ?? '').trim().toLowerCase()
+  return value === '1' || value === 'true' || value === 'on' || value === 'yes'
+}
+
+const categoryRecords: DomainCategoryRecord[] = [
+  { id: 'grid-production', name: '生产运行数据', parentId: null },
+  { id: 'grid-metering', name: '量测采集数据', parentId: 'grid-production' },
+  { id: 'grid-marketing', name: '营销服务数据', parentId: null },
+]
+
+const informationCategoryRecords: DomainCategoryRecord[] = [
+  { id: 'info-operation', name: '电网运行量测', parentId: null },
+  { id: 'info-customer', name: '用户侧明细', parentId: null },
+]
+
+const sourceRecords: DomainCategoryRecord[] = [
+  { id: 'dept-dispatch', name: '调控中心', parentId: null },
+  { id: 'dept-metering', name: '计量中心', parentId: null },
+]
+
+function createPhysicalTables(tableName: string, sourceSystem: string) {
+  return {
+    baseline: tableName,
+    businessTimeField: 'DATA_TIME',
+    tables: [tableName],
+    sourceSystems: [sourceSystem],
+    rows: [
+      {
+        tableName,
+        sourceSystem,
+        businessTimeField: 'DATA_TIME',
+        isBaseline: true,
+      },
+    ],
+  }
+}
+
+function createCatalogItem(overrides: Partial<CatalogItem> & Pick<CatalogItem, 'id' | 'code' | 'name'>): CatalogItem {
+  const { id, code, name, ...restOverrides } = overrides
+  const categoryId = overrides.categoryId ?? 'grid-metering'
+  const informationCategoryId = overrides.informationCategoryId ?? 'info-operation'
+  const departmentId = overrides.departmentId ?? 'dept-metering'
+  const sourceSystem = overrides.sourceSystem ?? '用电信息采集 2.0'
+  const sourceTable = overrides.sourceTable ?? 'DWD_METER_CURVE_15M'
+  const fieldRows = overrides.fieldRows ?? [
+    {
+      fieldName: '采集时间',
+      englishName: 'DATA_TIME',
+      fieldType: 'DATETIME',
+      length: '19',
+      nullable: '否',
+      shared: '否',
+      primary: '是',
+      description: '量测曲线采集时间',
+    },
+    {
+      fieldName: '户号',
+      englishName: 'CONS_NO',
+      fieldType: 'VARCHAR',
+      length: '32',
+      nullable: '否',
+      shared: '否',
+      primary: '否',
+      description: '用户侧业务标识，默认按敏感字段管控',
+    },
+    {
+      fieldName: '有功功率',
+      englishName: 'P_ACTIVE',
+      fieldType: 'DECIMAL',
+      length: '18,4',
+      nullable: '是',
+      shared: '是',
+      primary: '否',
+      description: '十五分钟有功功率量测值',
+    },
+  ]
+
+  return {
+    id,
+    code,
+    name,
+    categoryId,
+    category: overrides.category ?? '量测采集数据',
+    categoryAncestorIds: overrides.categoryAncestorIds ?? ['grid-production', categoryId],
+    businessAttributeId: '',
+    businessAttribute: '生产运行',
+    businessAttributePath: '生产运行',
+    businessAttributeAncestorIds: [],
+    industryCategory: '电网',
+    businessCategoryId: categoryId,
+    businessCategory: overrides.businessCategory ?? '量测采集数据',
+    businessCategoryPath: overrides.businessCategoryPath ?? '生产运行数据 / 量测采集数据',
+    informationCategoryId,
+    informationCategoryAncestorIds: [informationCategoryId],
+    informationCategory: overrides.informationCategory ?? '电网运行量测',
+    informationCategoryPath: overrides.informationCategoryPath ?? '电网运行量测',
+    openTypeId: '',
+    openType: '受控共享',
+    serviceTypeId: '',
+    serviceType: '数据表',
+    supplyMethod: '接口',
+    sharingAttribute: '条件共享',
+    departmentId,
+    department: overrides.department ?? '计量中心',
+    departmentAncestorIds: [departmentId],
+    regionId: '',
+    regionAncestorIds: [],
+    contact: 'security-ops@example.com',
+    tags: ['量测数据', '安全管控', '分类分级'],
+    description: overrides.description ?? '用于演示电网量测数据分类分级、字段安全策略、血缘关系和访问控制策略联动。',
+    summary: overrides.summary ?? '十五分钟量测曲线资源，包含用户侧标识和功率曲线字段。',
+    updateCycleId: '',
+    updateCycle: '15分钟',
+    format: ['TABLE', 'API'],
+    timeScope: '2026年至今',
+    publishDate: '2026-06-01',
+    updateTime: '2026-06-22 14:00:00',
+    areaScope: '省公司',
+    count: '1,280,000',
+    countValue: 1280000,
+    fieldCount: fieldRows.length,
+    usageCount: 42,
+    apiCount: 3,
+    fieldRows,
+    dataLineage: {
+      nodes: [
+        {
+          id: 'source-metering',
+          name: sourceSystem,
+          nodeType: 'data_source',
+          resourceCode: '',
+          layer: '采集源',
+          ownerId: departmentId,
+          ownerName: overrides.department ?? '计量中心',
+          tableCount: 1,
+          tables: [{ tableName: sourceTable, description: '源端采集表', rawLayer: 'source' }],
+        },
+        {
+          id: overrides.id,
+          name: overrides.name,
+          nodeType: 'warehouse_resource',
+          resourceCode: overrides.code,
+          layer: 'DWD',
+          ownerId: departmentId,
+          ownerName: overrides.department ?? '计量中心',
+          tableCount: 1,
+          tables: [{ tableName: sourceTable, description: '安全管控基准表', rawLayer: 'DWD' }],
+        },
+        {
+          id: 'api-secure-share',
+          name: '受控共享 API',
+          nodeType: 'data_api',
+          resourceCode: 'API-SECURE-SHARE',
+          layer: '服务层',
+          ownerId: 'dept-dispatch',
+          ownerName: '调控中心',
+          tableCount: 0,
+          tables: [],
+        },
+      ],
+      edges: [
+        { fromId: 'source-metering', fromName: sourceSystem, toId: overrides.id, toName: overrides.name },
+        { fromId: overrides.id, fromName: overrides.name, toId: 'api-secure-share', toName: '受控共享 API' },
+      ],
+      upstream: [],
+      downstream: [],
+      excludedNodeIds: [],
+      excludedEdgeKeys: [],
+    },
+    sourceSystem,
+    sourceTable,
+    physicalTables: createPhysicalTables(sourceTable, sourceSystem),
+    mapPreview: null,
+    linkInfo: { primary: '', items: [] },
+    remarks: '',
+    searchText: [
+      name,
+      code,
+      '量测数据 分类分级 字段安全 访问控制 跨域共享',
+      sourceSystem,
+      sourceTable,
+      ...fieldRows.flatMap((field) => [field.fieldName, field.englishName]),
+    ].join(' '),
+    ...restOverrides,
+  }
+}
+
+const demoCatalogItems = [
+  createCatalogItem({
+    id: 'grid-meter-curve-15m',
+    code: 'GRID-METER-SEC-001',
+    name: '用户侧十五分钟负荷曲线',
+  }),
+  createCatalogItem({
+    id: 'grid-dispatch-realtime',
+    code: 'GRID-DISPATCH-SEC-002',
+    name: '调度实时运行量测',
+    categoryId: 'grid-production',
+    category: '生产运行数据',
+    categoryAncestorIds: ['grid-production'],
+    businessCategory: '生产运行数据',
+    businessCategoryPath: '生产运行数据',
+    informationCategoryId: 'info-operation',
+    departmentId: 'dept-dispatch',
+    department: '调控中心',
+    sourceSystem: '调控云',
+    sourceTable: 'DWD_DISPATCH_REALTIME_MEASURE',
+    summary: '实时调度量测资源，默认按核心运行数据进行安全管控。',
+  }),
+]
+
+export function createDemoPortalData(): PortalData {
+  const categoryTree = buildCatalogCategoryTree(
+    categoryRecords,
+    demoCatalogItems.map((item) => ({
+      categoryId: item.categoryId,
+      categoryAncestorIds: item.categoryAncestorIds,
+    })),
+  )
+  const informationCategoryTree = buildCatalogCategoryTree(
+    informationCategoryRecords,
+    demoCatalogItems.map((item) => ({
+      categoryId: item.informationCategoryId,
+      categoryAncestorIds: item.informationCategoryAncestorIds,
+    })),
+  )
+  const sourceTree = buildCatalogCategoryTree(
+    sourceRecords,
+    demoCatalogItems.map((item) => ({
+      categoryId: item.departmentId,
+      categoryAncestorIds: item.departmentAncestorIds,
+    })),
+  )
+
+  return {
+    catalogItems: demoCatalogItems,
+    categoryTree,
+    businessAttributeTree: [],
+    sourceTree,
+    regionTree: [],
+    informationCategoryTree,
+    categoryOptions: [['全部', demoCatalogItems.length], ['量测采集数据', 1], ['生产运行数据', 1]],
+    openOptions: [['全部', demoCatalogItems.length], ['受控共享', demoCatalogItems.length]],
+    departmentOptions: [['全部', demoCatalogItems.length], ['计量中心', 1], ['调控中心', 1]],
+    regionOptions: [['全部', demoCatalogItems.length], ['省公司', demoCatalogItems.length]],
+    editOptions: {
+      updateCycleOptions: [],
+      sharingAttributeOptions: [],
+      serviceTypeOptions: [],
+      supplyMethodOptions: [],
+    },
+  }
+}
+
+export function createDemoSecurityPolicies(): SecurityGovernancePolicyRecord[] {
+  return [
+    {
+      id: 'sg-grid-meter-curve-15m',
+      resourceId: 'grid-meter-curve-15m',
+      resourceName: '用户侧十五分钟负荷曲线',
+      securityCategoryId: 'personal-sensitive',
+      securityCategory: '用户侧敏感数据',
+      securityLevelId: 'level-3',
+      securityLevel: '3级',
+      dataSubjectTypeId: 'customer',
+      dataSubjectType: '电力客户',
+      securityOwnerUserId: '',
+      securityOwnerUserName: '安全管理员',
+      securityProfileStatus: 'effective',
+      securityReviewStatus: 'reviewed',
+      importantDataFlag: true,
+      coreControlFlag: true,
+      shareScope: 'conditional',
+      externalShareAllowed: false,
+      openAllowed: false,
+      desensitizationRequired: true,
+      approvalRequired: true,
+      securityOwnerDept: '计量中心',
+      assessmentBasis: '含用户侧标识与用电曲线，按中风险敏感量测数据管控。',
+      riskNotes: '导出和跨域共享前必须审批并脱敏户号。',
+      lastReviewedAt: '2026-06-21T10:00:00+08:00',
+      nextReviewAt: '2026-09-21',
+      policyCode: 'POL-METER-001',
+      policyName: '用户侧量测曲线受控共享策略',
+      policySource: '量测数据安全管控组件设计',
+      policyStatus: 'effective',
+      accessScope: 'internal-controlled',
+      approvalMode: 'workflow',
+      desensitizationMode: 'tokenize',
+      exportAllowed: false,
+      exportScope: 'disabled',
+      apiAccessAllowed: true,
+      apiAuthMode: 'jwt-and-role',
+      effectiveFrom: '2026-06-01',
+      effectiveTo: '2026-12-31',
+      fieldProfilesJson: [],
+      fieldPoliciesJson: [],
+      securityProfileJson: {},
+      policyDetailJson: {},
+      securityReviewJson: {},
+      fieldSecurityProfileRows: [
+        {
+          seq: 1,
+          fieldCode: 'CONS_NO',
+          fieldName: '户号',
+          dataType: 'VARCHAR',
+          description: '用户侧业务标识',
+          informationCategory: '用户侧明细',
+          classificationLevel: '敏感经营',
+          securityLevel: '3级',
+          sensitivityType: '个人/客户标识',
+          sensitivityTags: ['客户标识', '准标识符'],
+          identifierFlag: true,
+          quasiIdentifierFlag: true,
+          importantFieldFlag: true,
+          levelBasis: '关联用户用电行为',
+          riskNotes: '禁止明文导出',
+          extra: {},
+        },
+        {
+          seq: 2,
+          fieldCode: 'P_ACTIVE',
+          fieldName: '有功功率',
+          dataType: 'DECIMAL',
+          description: '十五分钟有功功率量测值',
+          informationCategory: '电网运行量测',
+          classificationLevel: '运行明细',
+          securityLevel: '3级',
+          sensitivityType: '运行敏感',
+          sensitivityTags: ['负荷曲线'],
+          identifierFlag: false,
+          quasiIdentifierFlag: false,
+          importantFieldFlag: true,
+          levelBasis: '反映用户侧负荷行为',
+          riskNotes: '跨域聚合优先走同态加密计算',
+          extra: {},
+        },
+      ],
+      fieldSecurityPolicyRows: [
+        {
+          seq: 1,
+          fieldCode: 'CONS_NO',
+          fieldName: '户号',
+          requiredAccessScope: 'internal-controlled',
+          requiredDesensitization: true,
+          requiredDesensitizationMode: 'tokenize',
+          requiredExportAllowed: false,
+          requiredExportScope: 'disabled',
+          requiredApiAccessAllowed: true,
+          requiredApiReturnMode: 'masked',
+          requiredApprovalRequired: true,
+          requiredQueryConditionAllowed: false,
+          requiredAggregationAllowed: false,
+          requiredJoinAllowed: false,
+          notes: '仅授权岗位可查看脱敏值',
+          extra: {},
+        },
+      ],
+      legacyPhysicalTableRows: [],
+      fieldSecurityStats: {
+        totalFields: 2,
+        sensitiveFieldCount: 2,
+        importantFieldCount: 2,
+      },
+      remarks: '本地演示安全档案',
+      createdAt: '2026-06-01T09:00:00+08:00',
+      updatedAt: '2026-06-22T14:00:00+08:00',
+    },
+    {
+      id: 'sg-grid-dispatch-realtime',
+      resourceId: 'grid-dispatch-realtime',
+      resourceName: '调度实时运行量测',
+      securityCategoryId: 'core-operation',
+      securityCategory: '核心运行数据',
+      securityLevelId: 'level-4',
+      securityLevel: '4级',
+      dataSubjectTypeId: 'grid-device',
+      dataSubjectType: '电网设备',
+      securityOwnerUserId: '',
+      securityOwnerUserName: '调控安全员',
+      securityProfileStatus: 'effective',
+      securityReviewStatus: 'reviewed',
+      importantDataFlag: true,
+      coreControlFlag: true,
+      shareScope: 'deny-external',
+      externalShareAllowed: false,
+      openAllowed: false,
+      desensitizationRequired: true,
+      approvalRequired: true,
+      securityOwnerDept: '调控中心',
+      assessmentBasis: '涉及实时运行状态，按高风险核心运行数据管控。',
+      riskNotes: '原则上不对外共享明细，仅允许授权场景聚合使用。',
+      lastReviewedAt: '2026-06-20T16:30:00+08:00',
+      nextReviewAt: '2026-08-20',
+      policyCode: 'POL-DISPATCH-002',
+      policyName: '调度实时量测最小授权策略',
+      policySource: '量测数据安全管控组件设计',
+      policyStatus: 'effective',
+      accessScope: 'production-zone',
+      approvalMode: 'dual-approval',
+      desensitizationMode: 'aggregate-only',
+      exportAllowed: false,
+      exportScope: 'disabled',
+      apiAccessAllowed: true,
+      apiAuthMode: 'mfa-and-role',
+      effectiveFrom: '2026-06-01',
+      effectiveTo: '2026-12-31',
+      fieldProfilesJson: [],
+      fieldPoliciesJson: [],
+      securityProfileJson: {},
+      policyDetailJson: {},
+      securityReviewJson: {},
+      fieldSecurityProfileRows: [],
+      fieldSecurityPolicyRows: [],
+      legacyPhysicalTableRows: [],
+      fieldSecurityStats: {
+        totalFields: 0,
+        sensitiveFieldCount: 0,
+        importantFieldCount: 0,
+      },
+      remarks: '本地演示安全档案',
+      createdAt: '2026-06-01T09:00:00+08:00',
+      updatedAt: '2026-06-22T14:00:00+08:00',
+    },
+  ]
+}

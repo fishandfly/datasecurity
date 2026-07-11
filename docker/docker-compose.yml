@@ -1,0 +1,65 @@
+name: nocobase-8196
+
+services:
+  openfhe:
+    platform: linux/amd64
+    build:
+      context: ../openfhe-service
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8088:8088"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/health', timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 20s
+    networks:
+      - nocobase
+
+  app:
+    image: nocobase/nocobase:2.1.21-full
+    restart: always
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_KEY: 584b64d11bcf3fca6cf27f42ab9ef0dde8dfa5d94fb5a0378a4eca8ccac887d5
+      DB_DIALECT: postgres
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: nocobase
+      DB_USER: nocobase
+      DB_PASSWORD: "O4oj11n/E5htrmYiAXoZMuX91iH/Idso"
+      TZ: Asia/Shanghai
+    volumes:
+      - ./storage:/app/nocobase/storage
+    ports:
+      - "8196:80"
+    networks:
+      - nocobase
+
+  postgres:
+    image: postgres:16
+    restart: always
+    command: postgres -c wal_level=logical
+    environment:
+      POSTGRES_USER: nocobase
+      POSTGRES_DB: nocobase
+      POSTGRES_PASSWORD: "O4oj11n/E5htrmYiAXoZMuX91iH/Idso"
+      TZ: Asia/Shanghai
+    volumes:
+      - ./storage/db/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nocobase -d nocobase"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - nocobase
+
+networks:
+  nocobase:
+    driver: bridge

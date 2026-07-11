@@ -1,0 +1,72 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const applicationGovernanceRoutesSource = readFileSync(resolve(process.cwd(), 'src/modules/ApplicationGovernance/routes.tsx'), 'utf8')
+const demandPageSource = readFileSync(resolve(process.cwd(), 'src/pages/demand-page-internal.tsx'), 'utf8')
+const detailPageSource = readFileSync(resolve(process.cwd(), 'src/pages/supply-demand-detail-page.tsx'), 'utf8')
+const supplyDemandDataSource = readFileSync(resolve(process.cwd(), 'src/lib/nocobase-supply-demand-data.ts'), 'utf8')
+
+test('供需对接详情页已注册独立路由，且可从 /demand 列表点击进入', () => {
+  assert.match(applicationGovernanceRoutesSource, /const SupplyDemandDetailPage = lazy\(async \(\) => \(\{ default: \(await import\('\.\.\/\.\.\/pages\/supply-demand-detail-page'\)\)\.SupplyDemandDetailPage \}\)\)/)
+  assert.match(applicationGovernanceRoutesSource, /<Route path="\/demand\/:id" element={<SupplyDemandDetailPage \/>} \/>/)
+  assert.match(demandPageSource, /import \{ Link, useLocation, useSearchParams \} from 'react-router-dom'/)
+  assert.match(demandPageSource, /import \{ appendEmbedToPath, readEmbedMode \} from '\.\.\/lib\/embed-mode'/)
+  assert.match(demandPageSource, /const isEmbedMode = readEmbedMode\(location\.search\)/)
+  assert.match(demandPageSource, /const withEmbed = \(path: string\) => appendEmbedToPath\(path, isEmbedMode\)/)
+  assert.match(demandPageSource, /const detailPath = withEmbed\(`\/demand\/\$\{item\.id\}`\)/)
+  assert.match(demandPageSource, /const detailState = \{ returnTo: `\$\{location\.pathname\}\$\{location\.search\}` \}/)
+  assert.match(demandPageSource, /case 'requiredDataResourceName':/)
+  assert.match(demandPageSource, /to=\{detailPath\}/)
+  assert.match(demandPageSource, /state=\{detailState\}/)
+  assert.match(demandPageSource, /<th className=\{TABLE_HEAD_CELL_CLASS\}>操作<\/th>/)
+  assert.match(demandPageSource, /查看详情/)
+})
+
+test('供需对接详情页展示基本信息、对应数据资源和对应应用', () => {
+  assert.match(detailPageSource, /useSupplyDemandPortalData\(true, \{ includeLinkedResources: true, includeRelatedApps: true \}\)/)
+  assert.match(detailPageSource, /usePortalContext\(\)/)
+  assert.match(detailPageSource, /type SupplyDemandDetailLocationState = \{/)
+  assert.match(detailPageSource, /const returnTo = typeof locationState\?\.returnTo === 'string'/)
+  assert.match(detailPageSource, /navigate\(returnTo\)/)
+  assert.match(detailPageSource, /navigate\(withEmbed\('\/demand'\)\)/)
+  assert.match(detailPageSource, /<span>基本信息<\/span>/)
+  assert.match(detailPageSource, /<span>对应数据资源<\/span>/)
+  assert.match(detailPageSource, /<span>对应应用<\/span>/)
+  assert.match(detailPageSource, /function buildLinkedResources\(item: SupplyDemandInfo, catalogItems: CatalogItem\[]\)/)
+  assert.match(detailPageSource, /function buildApplicationCards\(relatedApps: SupplyDemandRelatedApp\[]\)/)
+  assert.match(detailPageSource, /<th className="px-4 py-3.5 font-semibold">数据资源<\/th>/)
+  assert.match(detailPageSource, /<th className="px-4 py-3.5 font-semibold">资源分类<\/th>/)
+  assert.match(detailPageSource, /<th className="px-4 py-3.5 font-semibold">提供单位<\/th>/)
+  assert.match(detailPageSource, /<th className="px-4 py-3.5 font-semibold">更新周期<\/th>/)
+  assert.match(detailPageSource, /to=\{withEmbed\(`\/demand\/applications\/\$\{app\.id\}`\)\}/)
+  assert.match(detailPageSource, /to=\{withEmbed\(`\/catalog\/\$\{resource\.id\}`\)\}/)
+})
+
+test('供需对接详情页为管理员提供编辑对应数据资源和对应场景应用入口', () => {
+  assert.match(detailPageSource, /import \{ createPortal \} from 'react-dom'/)
+  assert.match(detailPageSource, /import \{ canManageCatalogResources \} from '\.\.\/lib\/admin-role'/)
+  assert.match(detailPageSource, /import \{ usePortalAppCatalogData \} from '\.\.\/lib\/nocobase-app-data'/)
+  assert.match(detailPageSource, /updateSupplyDemandLinkedResources/)
+  assert.match(detailPageSource, /updateSupplyDemandRelatedApps/)
+  assert.match(detailPageSource, /const canManageSupplyDemand = canManageCatalogResources\(session\?\.user\.roles\)/)
+  assert.match(detailPageSource, /编辑对应数据资源/)
+  assert.match(detailPageSource, /编辑对应场景应用/)
+  assert.match(detailPageSource, /title="编辑对应数据资源"/)
+  assert.match(detailPageSource, /title="编辑对应场景应用"/)
+  assert.match(detailPageSource, /搜索数据资源名称、分类、提供单位/)
+  assert.match(detailPageSource, /搜索场景应用名称、标签、描述/)
+  assert.match(detailPageSource, /保存对应数据资源/)
+  assert.match(detailPageSource, /保存对应场景应用/)
+})
+
+test('供需对接数据层提供关联数据资源和关联场景应用的更新能力', () => {
+  assert.match(supplyDemandDataSource, /export async function updateSupplyDemandLinkedResources\(/)
+  assert.match(supplyDemandDataSource, /export async function updateSupplyDemandRelatedApps\(/)
+  assert.match(supplyDemandDataSource, /const associationResource = `\$\{collectionName\}\.\$\{associationName\}`/)
+  assert.match(supplyDemandDataSource, /nocobaseClient\.resource\(associationResource, recordId\)\.set\(\{ values: valuesAsIds \}\)/)
+  assert.match(supplyDemandDataSource, /const SUPPLY_DEMAND_RELATED_APP_ASSOCIATION_CANDIDATES = \['related_apps', 'related_app'\] as const/)
+  assert.match(supplyDemandDataSource, /await setSupplyDemandAssociationByCandidates\(\s*collectionName,\s*normalizedRecordId,\s*SUPPLY_DEMAND_RELATED_APP_ASSOCIATION_CANDIDATES,\s*relatedAppIds,\s*\)/)
+  assert.match(supplyDemandDataSource, /clearSupplyDemandPortalCaches\(\)/)
+})
