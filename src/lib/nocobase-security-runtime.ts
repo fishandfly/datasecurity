@@ -42,6 +42,7 @@ type RawSecurityDataSource = Record<string, unknown> & {
   workflow_key?: string | null
   source_tags?: unknown
   security_config_json?: unknown
+  connection_options_json?: unknown
   last_monitor_json?: unknown
   last_checked_at?: string | null
   createdAt?: string | null
@@ -68,6 +69,8 @@ type RawConfidentialTask = Record<string, unknown> & {
 }
 
 export type SecurityDataSourceType =
+  | 'validation_database'
+  | 'existing_api'
   | 'yongcai20'
   | 'dispatch_cloud'
   | 'substation_monitor'
@@ -80,6 +83,7 @@ export type SecurityDataSourceType =
 
 export type SecurityDataSourceStatus = 'connected' | 'unconnected' | 'exception' | 'testing' | 'disabled'
 export type SecuritySensitivityLevel = 'public' | 'internal' | 'sensitive' | 'highly_sensitive'
+export type SecurityDatabaseDialect = 'postgresql' | 'mysql'
 export type OpenFheAlgorithm = 'BFV' | 'CKKS'
 export type OpenFheOperation = 'sum' | 'mean'
 export type ConfidentialTaskStatus = 'pending_approval' | 'approved' | 'running' | 'completed' | 'paused' | 'failed'
@@ -127,6 +131,8 @@ export type SecurityDataSourceRecord = {
   statusLabel: string
   sensitivity: SecuritySensitivityLevel
   sensitivityLabel: string
+  databaseDialect: SecurityDatabaseDialect
+  connectionOptions: Record<string, unknown>
   host: string
   port: string
   databaseName: string
@@ -269,6 +275,8 @@ export const DEFAULT_OPENFHE_ENGINE_CONFIG: OpenFheEngineConfig = {
 }
 
 const FALLBACK_LABELS: Record<string, string> = {
+  validation_database: '量测验证数据库',
+  existing_api: '已有量测接口',
   yongcai20: '用采2.0',
   dispatch_cloud: '调控云',
   substation_monitor: '变电站集中监控',
@@ -355,6 +363,8 @@ function normalizeStringArray(value: unknown) {
 function parseOpenFheAlgorithm(value: unknown): OpenFheAlgorithm | null {
   const normalized = normalizeText(value).toUpperCase()
   if (normalized === 'BFV' || normalized === 'CKKS') return normalized
+  if (normalized === '浮点近似型' || normalized === '浮点近似方案') return 'CKKS'
+  if (normalized === '整数精确型') return 'BFV'
   return null
 }
 
@@ -364,7 +374,7 @@ function normalizeAlgorithm(value: unknown): OpenFheAlgorithm {
 
 function normalizeSourceType(value: unknown): SecurityDataSourceType {
   const normalized = normalizeText(value) as SecurityDataSourceType
-  return ['yongcai20', 'dispatch_cloud', 'substation_monitor', 'distribution_automation', 'wide_area_measurement', 'realtime_db', 'history_db', 'third_party_api', 'data_warehouse'].includes(normalized)
+  return ['validation_database', 'existing_api', 'yongcai20', 'dispatch_cloud', 'substation_monitor', 'distribution_automation', 'wide_area_measurement', 'realtime_db', 'history_db', 'third_party_api', 'data_warehouse'].includes(normalized)
     ? normalized
     : 'realtime_db'
 }
@@ -495,6 +505,8 @@ function mapSourceRecord(raw: RawSecurityDataSource, labels: Map<string, string>
   const status = normalizeSourceStatus(raw.connection_status)
   const sensitivity = normalizeSensitivity(raw.sensitivity_level)
   const policy = normalizeObject(raw.policy)
+  const connectionOptions = normalizeObject(raw.connection_options_json)
+  const databaseDialect = connectionOptions.dialect === 'mysql' ? 'mysql' : 'postgresql'
   return {
     id: normalizeText(raw.id),
     code: normalizeText(raw.source_code),
@@ -505,6 +517,8 @@ function mapSourceRecord(raw: RawSecurityDataSource, labels: Map<string, string>
     statusLabel: labelFor(labels, status),
     sensitivity,
     sensitivityLabel: labelFor(labels, sensitivity),
+    databaseDialect,
+    connectionOptions,
     host: normalizeText(raw.host),
     port: normalizeText(raw.port),
     databaseName: normalizeText(raw.database_name),
@@ -573,6 +587,11 @@ function sourceValues(record: EditableSecurityDataSource) {
     workflow_key: record.workflowKey || null,
     source_tags: record.tags,
     security_config_json: record.securityConfig,
+    connection_options_json: {
+      ...record.connectionOptions,
+      dialect: record.databaseDialect,
+      readOnly: true,
+    },
   }
 }
 

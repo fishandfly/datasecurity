@@ -47,7 +47,7 @@ export type SecurityDashboardSourceHealth = {
   action: string
 }
 
-export type SecurityDashboardModuleId = 'data-access' | 'resource-control' | 'access-control' | 'homomorphic-encryption'
+export type SecurityDashboardModuleId = 'data-access' | 'resource-control' | 'access-control' | 'risk-events' | 'homomorphic-encryption'
 
 export type SecurityDashboardModuleSummary = {
   id: SecurityDashboardModuleId

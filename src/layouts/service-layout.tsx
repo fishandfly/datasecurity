@@ -21,6 +21,23 @@ const themeModeToneClasses: Record<ThemeMode, string> = {
   dark: 'bg-[linear-gradient(135deg,#1f2937,#64748b)]',
 }
 
+const securityPrimaryPrefixes: Record<string, string> = {
+  '/security-governance/ingest/sources': '/security-governance/ingest',
+  '/security-governance/tags/catalog': '/security-governance/tags',
+  '/security-governance/access/policies': '/security-governance/access',
+  '/security-governance/risks/events': '/security-governance/risks',
+  '/security-governance/homomorphic/tasks': '/security-governance/homomorphic',
+}
+
+function isPrimaryNavigationActive(pathname: string, target: string, isActive: boolean) {
+  if (target === '/security-governance/dashboard') return pathname === target
+  if (target === '/security-governance/resources/catalog') {
+    return pathname === target || /^\/security-governance\/resources\/(?!apis(?:\/|$))/.test(pathname)
+  }
+  const prefix = securityPrimaryPrefixes[target]
+  return isActive || Boolean(prefix && pathname.startsWith(prefix))
+}
+
 export function ServiceLayout() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -105,18 +122,18 @@ export function ServiceLayout() {
             )}
           >
             <Link to={withEmbed('/')} className="flex min-w-0 items-center gap-3">
-              <img src={siteLogo?.url || defaultLogo} alt="Logo" className="h-[48px] w-auto" />
+              <img src={siteLogo?.url || defaultLogo} alt="Logo" className="h-10 w-auto sm:h-[48px]" />
               <div className="min-w-0">
                 <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
                   <span className="relative inline-flex min-w-0 items-center pb-[1px] leading-none">
                     <span
                       aria-hidden="true"
-                      className="pointer-events-none absolute inset-0 translate-y-[1px] whitespace-nowrap text-[2rem] font-[800] tracking-[0.018em] text-[var(--brand-title-ghost)] [font-family:'Microsoft YaHei','PingFang SC','Hiragino Sans GB','Heiti SC','SimHei',sans-serif]"
+                      className="pointer-events-none absolute inset-0 translate-y-[1px] whitespace-normal text-[1.25rem] font-[800] leading-6 tracking-[0.018em] text-[var(--brand-title-ghost)] sm:whitespace-nowrap sm:text-[2rem] sm:leading-none [font-family:'Microsoft YaHei','PingFang SC','Hiragino Sans GB','Heiti SC','SimHei',sans-serif]"
                     >
                       {resolvedSiteTitle}
                     </span>
                     <span
-                      className="relative whitespace-nowrap text-[2rem] font-[800] tracking-[0.018em] text-[var(--brand-title-main)] [font-family:'Microsoft YaHei','PingFang SC','Hiragino Sans GB','Heiti SC','SimHei',sans-serif]"
+                      className="relative whitespace-normal text-[1.25rem] font-[800] leading-6 tracking-[0.018em] text-[var(--brand-title-main)] sm:whitespace-nowrap sm:text-[2rem] sm:leading-none [font-family:'Microsoft YaHei','PingFang SC','Hiragino Sans GB','Heiti SC','SimHei',sans-serif]"
                       style={{ textShadow: 'var(--brand-title-shadow)' }}
                     >
                       {resolvedSiteTitle}
@@ -129,7 +146,7 @@ export function ServiceLayout() {
               <div className="flex w-full flex-wrap items-center justify-end gap-3 sm:w-auto sm:flex-nowrap">
                 <form
                   key={`global-search:${location.pathname}:${location.search}`}
-                  className="group flex h-12 w-full min-w-[320px] items-center gap-3 rounded-[999px] border border-[rgba(var(--theme-soft-rgb),0.18)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--surface)_92%,transparent),color-mix(in_srgb,var(--surface-soft)_96%,transparent))] px-3 pl-4 text-left text-[var(--text-secondary)] shadow-[var(--shadow-soft)] backdrop-blur transition hover:-translate-y-[1px] hover:border-[rgba(var(--theme-soft-rgb),0.32)] hover:shadow-[var(--shadow-medium)] sm:w-[320px] lg:w-[380px] xl:w-[450px]"
+                  className="group flex h-12 w-full min-w-0 items-center gap-2 rounded-[999px] border border-[rgba(var(--theme-soft-rgb),0.18)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--surface)_92%,transparent),color-mix(in_srgb,var(--surface-soft)_96%,transparent))] px-2 pl-3 text-left text-[var(--text-secondary)] shadow-[var(--shadow-soft)] backdrop-blur transition hover:-translate-y-[1px] hover:border-[rgba(var(--theme-soft-rgb),0.32)] hover:shadow-[var(--shadow-medium)] sm:w-[320px] sm:min-w-[320px] sm:gap-3 sm:px-3 sm:pl-4 lg:w-[380px] xl:w-[450px]"
                   onSubmit={(event) => {
                     handleGlobalSearch(event)
                   }}
@@ -148,7 +165,7 @@ export function ServiceLayout() {
                   </div>
                   <button
                     type="submit"
-                    className="inline-flex h-9 shrink-0 items-center rounded-full bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] px-4 text-[0.8125rem] font-medium text-white shadow-[0_12px_24px_rgba(var(--theme-strong-rgb),0.20)]"
+                    className="inline-flex h-9 shrink-0 items-center rounded-full bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] px-3 text-[0.8125rem] font-medium text-white shadow-[0_12px_24px_rgba(var(--theme-strong-rgb),0.20)] sm:px-4"
                   >
                     安全检索
                   </button>
@@ -205,8 +222,8 @@ export function ServiceLayout() {
                 end={item.target === '/'}
                 className={({ isActive }) =>
                   cn(
-                    'relative flex h-[3.375rem] min-w-[8.625rem] items-center justify-center gap-[0.625rem] px-4 text-[1rem] font-semibold !text-[var(--top-nav-text)] transition hover:bg-[var(--top-nav-item-hover-bg)] hover:!text-[var(--top-nav-text)]',
-                    isActive &&
+                    'relative flex h-[3.375rem] min-w-[8.625rem] shrink-0 items-center justify-center gap-[0.625rem] whitespace-nowrap px-4 text-[0.9375rem] font-semibold !text-[var(--top-nav-text)] transition hover:bg-[var(--top-nav-item-hover-bg)] hover:!text-[var(--top-nav-text)]',
+                    isPrimaryNavigationActive(location.pathname, item.target, isActive) &&
                       'bg-[var(--top-nav-item-active-bg)] font-semibold !text-[var(--top-nav-text)] after:absolute after:bottom-0 after:left-1/2 after:h-[0.1875rem] after:w-[3.5rem] after:-translate-x-1/2 after:rounded-full after:bg-[var(--top-nav-item-active-line)] before:absolute before:bottom-[0.625rem] before:left-1/2 before:h-[1.75rem] before:w-[5rem] before:-translate-x-1/2 before:rounded-full before:bg-[radial-gradient(circle,var(--top-nav-item-active-glow),transparent_72%)]',
                   )
                 }

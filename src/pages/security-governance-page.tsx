@@ -1,8 +1,9 @@
-import { ChevronDown, Database, FileText, FolderTree, LockKeyhole, MapPinned, Network, Plus, Search, ShieldCheck, Table2 } from 'lucide-react'
+import { ChevronDown, Database, FolderTree, LockKeyhole, Plus, Search, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { ResourceEditDialog } from '../components/resource-edit-dialog'
-import { Button, ScenicPanel, StatCard, TopicPill } from '../components/ui'
+import { SecurityModuleTabs } from '../components/security-module-tabs'
+import { Button, TopicPill } from '../components/ui'
 import { canManageCatalogResources } from '../lib/admin-role'
 import {
   createInitialExpandedCategoryIds,
@@ -13,6 +14,7 @@ import {
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
 import { getCatalogResourceTypeFilterId } from '../lib/catalog-resource-type'
 import { useSecurityGovernancePolicies } from '../lib/nocobase-security-governance'
+import { useSecurityDataSources } from '../lib/nocobase-security-runtime'
 import { usePortalContext } from '../lib/portal-context'
 import {
   buildSecurityGovernanceCountsById,
@@ -25,21 +27,9 @@ import {
 } from '../lib/security-governance'
 import type { EditableResourceRecord } from '../lib/nocobase-resource-edit'
 
-type ResourceControlTypeId = 'database-table' | 'data-api' | 'spatial-data' | 'document-data'
-
-const RESOURCE_CONTROL_TABS: Array<{
-  id: ResourceControlTypeId
-  label: string
-  icon: typeof Database
-}> = [
-  { id: 'database-table', label: '数据库表', icon: Table2 },
-  { id: 'data-api', label: '数据API', icon: Network },
-  { id: 'spatial-data', label: '空间数据', icon: MapPinned },
-  { id: 'document-data', label: '文档数据', icon: FileText },
-]
-
 const sidebarItemClass = 'text-[0.875rem] leading-[1.25rem]'
 const PAGE_SIZE = 12
+const DATABASE_TABLE_LABEL = '数据库表'
 
 type FacetOption = {
   id: string
@@ -51,24 +41,15 @@ function normalizeTypeText(value: string) {
   return value.replace(/\s+/g, '').trim()
 }
 
-function resolveResourceControlType(item: SecurityGovernanceJoinedItem): ResourceControlTypeId {
+function isDatabaseTableResource(item: SecurityGovernanceJoinedItem) {
   const combinedText = normalizeTypeText(`${item.serviceTypeId} ${item.serviceType} ${item.name} ${item.summary}`)
 
   if (/文档|文件|附件|知识|报告|制度|规范|标准|PDF|DOC|XLS/i.test(combinedText)) {
-    return 'document-data'
+    return false
   }
 
   const catalogTypeId = getCatalogResourceTypeFilterId(item)
-
-  if (catalogTypeId === 'spatial-resource') {
-    return 'spatial-data'
-  }
-
-  if (catalogTypeId === 'data-api') {
-    return 'data-api'
-  }
-
-  return 'database-table'
+  return catalogTypeId !== 'spatial-resource' && catalogTypeId !== 'data-api'
 }
 
 function mapTreeCounts(tree: CatalogCategoryTreeNode[], counts: Map<string, number>): CatalogCategoryTreeNode[] {
@@ -106,65 +87,14 @@ function mapFacetOptionsToTree(options: FacetOption[]): CatalogCategoryTreeNode[
     }))
 }
 
-function resolveCreateResourceTypeOptionId(
-  activeType: ResourceControlTypeId,
-  options: Array<{ value: string; label: string }>,
-) {
-  const matchers: Record<ResourceControlTypeId, RegExp> = {
-    'database-table': /数据库|数据表|表/i,
-    'data-api': /API|接口|服务/i,
-    'spatial-data': /空间|地图|地理|GIS/i,
-    'document-data': /文档|文件|附件|报告|制度/i,
-  }
-
-  return options.find((option) => matchers[activeType].test(`${option.label} ${option.value}`))?.value ?? ''
+function resolveCreateResourceTypeOptionId(options: Array<{ value: string; label: string }>) {
+  return options.find((option) => /数据库|数据表|表/i.test(`${option.label} ${option.value}`))?.value ?? ''
 }
 
-function ResourceControlTypeTabs({
-  activeType,
-  searchParams,
-  typeCounts,
-  withEmbed,
-}: {
-  activeType: ResourceControlTypeId
-  searchParams: URLSearchParams
-  typeCounts: Record<ResourceControlTypeId, number>
-  withEmbed: (path: string) => string
-}) {
-  const buildTypeHref = (typeId: ResourceControlTypeId) => {
-    const nextSearchParams = new URLSearchParams(searchParams)
-    nextSearchParams.set('type', typeId)
-    nextSearchParams.delete('tab')
-    nextSearchParams.delete('page')
-    nextSearchParams.delete('categoryNode')
-    nextSearchParams.delete('businessCategoryNode')
-    nextSearchParams.delete('informationCategoryNode')
-    nextSearchParams.delete('securityCategory')
-    nextSearchParams.delete('securityLevel')
-    return withEmbed(`/security-governance/resources?${nextSearchParams.toString()}`)
-  }
-
-  return (
-    <div className="inline-flex flex-wrap gap-2 rounded-[18px] border border-[rgba(var(--theme-soft-rgb),0.18)] bg-[color-mix(in_srgb,var(--surface-glass)_92%,transparent)] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur">
-      {RESOURCE_CONTROL_TABS.map((tab) => (
-        <Link
-          key={tab.id}
-          to={buildTypeHref(tab.id)}
-          className={`inline-flex min-w-[9rem] items-center gap-2 rounded-[14px] px-4 py-3 text-[0.875rem] font-medium transition ${
-            activeType === tab.id
-              ? 'bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] !text-white shadow-[0_14px_24px_rgba(var(--theme-strong-rgb),0.20)]'
-              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] hover:text-[var(--primary)]'
-          }`}
-        >
-          <tab.icon className={`h-4 w-4 shrink-0 ${activeType === tab.id ? '!text-white' : ''}`} />
-          <span className={activeType === tab.id ? '!text-white' : ''}>{tab.label}</span>
-          <span className={`ml-1 rounded-full px-2 py-0.5 text-[0.6875rem] ${activeType === tab.id ? 'bg-white/18 !text-white' : 'bg-[var(--surface-muted)] text-[var(--text-muted)]'}`}>
-            {typeCounts[tab.id].toLocaleString()}
-          </span>
-        </Link>
-      ))}
-    </div>
-  )
+function resolveMinuteUpdateCycleOptionId(options: Array<{ value: string; label: string }>) {
+  return options.find((option) => option.label.trim() === '分钟')?.value
+    ?? options.find((option) => /分钟/.test(`${option.label} ${option.value}`))?.value
+    ?? ''
 }
 
 function SidebarTreeSection({
@@ -294,14 +224,13 @@ export function SecurityGovernancePage() {
     isLoading: isSecurityLoading,
     error: securityError,
   } = useSecurityGovernancePolicies(true)
+  const {
+    data: securityDataSources,
+    isLoading: isDataSourceLoading,
+    error: dataSourceError,
+  } = useSecurityDataSources(true)
   const isEmbedMode = readEmbedMode(location.search)
   const withEmbed = (path: string) => appendEmbedToPath(path, isEmbedMode)
-  const requestedType = searchParams.get('type')?.trim() ?? ''
-  const activeResourceType: ResourceControlTypeId =
-    requestedType === 'data-api' || requestedType === 'spatial-data' || requestedType === 'document-data'
-      ? requestedType
-      : 'database-table'
-  const activeResourceTypeMeta = RESOURCE_CONTROL_TABS.find((item) => item.id === activeResourceType) ?? RESOURCE_CONTROL_TABS[0]
   const currentKeyword = searchParams.get('keyword')?.trim() ?? ''
   const activeCategoryNodeId = searchParams.get('categoryNode')?.trim() ?? ''
   const activeBusinessCategoryNodeId = searchParams.get('businessCategoryNode')?.trim() ?? ''
@@ -311,30 +240,17 @@ export function SecurityGovernancePage() {
   const currentPage = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1
   const [keywordInput, setKeywordInput] = useState(currentKeyword)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const [createNotice, setCreateNotice] = useState('')
   const canManageResources = canManageCatalogResources(session?.user.roles)
-  const isLoading = isPortalLoading || isSecurityLoading
-  const error = portalError || securityError || null
+  const isLoading = isPortalLoading || isSecurityLoading || isDataSourceLoading
+  const error = portalError || securityError || dataSourceError || null
   const governanceItems = useMemo(
     () => joinSecurityGovernanceItems(securityPolicies, catalogItems),
     [catalogItems, securityPolicies],
   )
-  const typeCounts = useMemo(
-    () => RESOURCE_CONTROL_TABS.reduce((counts, tab) => {
-      counts[tab.id] = 0
-      return counts
-    }, {} as Record<ResourceControlTypeId, number>),
-    [],
-  )
-  const countedTypeSummary = useMemo(() => {
-    const counts = { ...typeCounts }
-    governanceItems.forEach((item) => {
-      counts[resolveResourceControlType(item)] += 1
-    })
-    return counts
-  }, [governanceItems, typeCounts])
   const typedGovernanceItems = useMemo(
-    () => governanceItems.filter((item) => resolveResourceControlType(item) === activeResourceType),
-    [activeResourceType, governanceItems],
+    () => governanceItems.filter(isDatabaseTableResource),
+    [governanceItems],
   )
 
   useEffect(() => {
@@ -424,10 +340,19 @@ export function SecurityGovernancePage() {
   const createResourceInitialValues = useMemo<Partial<EditableResourceRecord>>(
     () => ({
       domainCategoryId: activeCategoryNodeId,
-      dataResourceTypeId: resolveCreateResourceTypeOptionId(activeResourceType, editOptions.serviceTypeOptions),
-      tags: [activeResourceTypeMeta.label],
+      dataResourceTypeId: resolveCreateResourceTypeOptionId(editOptions.serviceTypeOptions),
+      updateCycleId: resolveMinuteUpdateCycleOptionId(editOptions.updateCycleOptions),
+      protectionLevel: 'l2',
+      resourceStatus: 'enabled',
+      tags: [DATABASE_TABLE_LABEL],
     }),
-    [activeCategoryNodeId, activeResourceType, activeResourceTypeMeta.label, editOptions.serviceTypeOptions],
+    [activeCategoryNodeId, editOptions.serviceTypeOptions, editOptions.updateCycleOptions],
+  )
+  const dataSourceOptions = useMemo(
+    () => securityDataSources
+      .filter((source) => source.status === 'connected')
+      .map((source) => ({ value: source.id, label: `${source.name} (${source.code})` })),
+    [securityDataSources],
   )
 
   const sortedItems = useMemo(
@@ -474,32 +399,25 @@ export function SecurityGovernancePage() {
 
   const resetFilters = () => {
     setKeywordInput('')
-    const next = new URLSearchParams()
-    next.set('type', activeResourceType)
-    setSearchParams(next, { replace: true })
+    setSearchParams(new URLSearchParams(), { replace: true })
   }
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <ResourceControlTypeTabs
-          activeType={activeResourceType}
-          searchParams={searchParams}
-          typeCounts={countedTypeSummary}
-          withEmbed={withEmbed}
-        />
-        {canManageResources ? (
-          <button
-            type="button"
-            onClick={() => setIsCreateDialogOpen(true)}
-            className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-[999px] border border-[rgba(var(--theme-soft-rgb),0.20)] bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] px-5 text-[0.8125rem] font-semibold text-white shadow-[0_14px_24px_rgba(var(--theme-strong-rgb),0.18)] transition hover:translate-y-[-1px]"
-          >
-            <Plus className="h-4 w-4" />
+      <SecurityModuleTabs
+        module="resources"
+        actions={canManageResources ? (
+          <Button onClick={() => setIsCreateDialogOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
             新建数据资源
-          </button>
+          </Button>
         ) : null}
-      </div>
-
+      />
+      {createNotice ? (
+        <div className="rounded-[8px] border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-4 py-3 text-[0.875rem] text-[var(--status-success-text)]">
+          {createNotice}
+        </div>
+      ) : null}
       {isLoading ? (
         <div className="py-12 text-center text-[0.875rem] text-[var(--text-muted)]">正在加载数据资源管控视图...</div>
       ) : error ? (
@@ -508,28 +426,6 @@ export function SecurityGovernancePage() {
         </div>
       ) : (
         <>
-          <ScenicPanel hideRail className="overflow-hidden border-[rgba(209,223,235,0.96)] bg-[linear-gradient(135deg,var(--surface-hero-start),var(--surface-hero-end))] p-0 shadow-[var(--shadow-elevated)]">
-            <div className="px-5 py-3">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {filteredSnapshot.overviewMetrics.map((metric, index) => (
-                  <StatCard
-                    key={metric.key}
-                    title={metric.label}
-                    value={metric.value.toLocaleString()}
-                    tone={index % 2 === 1 ? 'green' : 'blue'}
-                    icon={metric.key === 'total'
-                      ? <Database className="h-4 w-4" />
-                      : metric.key === 'securityCategoryCoverage'
-                        ? <FolderTree className="h-4 w-4" />
-                        : metric.key === 'securityLevelCoverage'
-                          ? <ShieldCheck className="h-4 w-4" />
-                          : <LockKeyhole className="h-4 w-4" />}
-                  />
-                ))}
-              </div>
-            </div>
-          </ScenicPanel>
-
           <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
             <div className="space-y-4">
               <SidebarTreeSection
@@ -587,14 +483,14 @@ export function SecurityGovernancePage() {
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <div className="flex flex-wrap gap-2">
-                        <TopicPill>数据类型：{activeResourceTypeMeta.label}</TopicPill>
+                        <TopicPill>数据类型：{DATABASE_TABLE_LABEL}</TopicPill>
                         {activeCategoryNodeId ? <TopicPill>数据分类：{categoryLookup.get(activeCategoryNodeId)?.pathLabel ?? activeCategoryNodeId}</TopicPill> : null}
                         {activeBusinessCategoryNodeId ? <TopicPill>业务分类：{businessCategoryLookup.get(activeBusinessCategoryNodeId)?.pathLabel ?? activeBusinessCategoryNodeId}</TopicPill> : null}
                         {activeSecurityCategoryId ? <TopicPill>安全分类：{securityCategoryLabel || activeSecurityCategoryId}</TopicPill> : null}
                         {activeSecurityLevelId ? <TopicPill>安全等级：{securityLevelLabel || activeSecurityLevelId}</TopicPill> : null}
                         {currentKeyword ? <TopicPill>关键词：{currentKeyword}</TopicPill> : null}
                         {!activeCategoryNodeId && !activeBusinessCategoryNodeId && !activeSecurityCategoryId && !activeSecurityLevelId && !currentKeyword ? (
-                          <TopicPill>当前为{activeResourceTypeMeta.label}全量视角</TopicPill>
+                          <TopicPill>当前为{DATABASE_TABLE_LABEL}全量视角</TopicPill>
                         ) : null}
                       </div>
                     </div>
@@ -617,7 +513,7 @@ export function SecurityGovernancePage() {
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
                               <Link
-                                to={withEmbed(`/security-governance/${item.policyId}`)}
+                                to={withEmbed(`/security-governance/resources/${item.resourceId}`)}
                                 state={{ returnTo: `${location.pathname}${location.search}` }}
                                 className="block text-[1rem] font-semibold leading-7 text-[var(--text-main)] transition hover:text-[var(--primary)]"
                               >
@@ -706,9 +602,14 @@ export function SecurityGovernancePage() {
           sourceTree={sourceTree}
           regionTree={regionTree}
           editOptions={editOptions}
+          securityGovernanceMode
+          dataSourceOptions={dataSourceOptions}
           onClose={() => setIsCreateDialogOpen(false)}
           onSaved={async () => {
+            setKeywordInput('')
+            setSearchParams(new URLSearchParams(), { replace: true })
             await refresh()
+            setCreateNotice('数据资源已创建并从后台重新读取。')
           }}
         />
       ) : null}

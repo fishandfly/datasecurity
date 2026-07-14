@@ -9,6 +9,7 @@ import {
   LockKeyhole,
   Radar,
   RadioTower,
+  RefreshCw,
   Search,
   ServerCog,
   ShieldAlert,
@@ -16,14 +17,12 @@ import {
   Zap,
   Workflow,
 } from 'lucide-react'
-import { useMemo } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
-import { useSecurityGovernancePolicies } from '../lib/nocobase-security-governance'
-import { useConfidentialTasks, useSecurityDataSources } from '../lib/nocobase-security-runtime'
-import { usePortalContext } from '../lib/portal-context'
-import { buildSecurityDashboardData, type SecurityDashboardDistributionItem, type SecurityDashboardModuleSummary, type SecurityDashboardRealtimeItem, type SecurityDashboardSourceTrendPoint, type SecurityDashboardSourceTrendSeries } from '../lib/security-dashboard-data'
-import { joinSecurityGovernanceItems } from '../lib/security-governance'
+import { EMPTY_SECURITY_DASHBOARD_V3_DATA, loadSecurityDashboardV3Data, type SecurityDashboardCoreMetric } from '../lib/security-dashboard-v3-data'
+import { type SecurityDashboardDistributionItem, type SecurityDashboardMetrics, type SecurityDashboardModuleSummary, type SecurityDashboardRealtimeItem, type SecurityDashboardSourceTrendPoint, type SecurityDashboardSourceTrendSeries } from '../lib/security-dashboard-data'
+import { toErrorMessage } from '../lib/nocobase-client'
 import { cn } from '../lib/utils'
 
 function formatCount(value: number) {
@@ -153,6 +152,7 @@ function ModuleSummaryCard({ item, withEmbed }: { item: SecurityDashboardModuleS
     'data-access': <DatabaseZap className="h-5 w-5" />,
     'resource-control': <Workflow className="h-5 w-5" />,
     'access-control': <ShieldAlert className="h-5 w-5" />,
+    'risk-events': <Bell className="h-5 w-5" />,
     'homomorphic-encryption': <LockKeyhole className="h-5 w-5" />,
   }[item.id]
 
@@ -198,7 +198,7 @@ function RealtimeStatusCard({ item }: { item: SecurityDashboardRealtimeItem }) {
   )
 }
 
-function OperationsRadar({ metrics }: { metrics: ReturnType<typeof buildSecurityDashboardData>['metrics'] }) {
+function OperationsRadar({ metrics }: { metrics: SecurityDashboardMetrics }) {
   const nodes = [
     { label: '接入', value: `${formatCount(metrics.sourceCount)}`, icon: <DatabaseZap className="h-4 w-4" />, className: 'left-[6%] top-[14%]' },
     { label: '资源', value: `${formatCount(metrics.resourceCount)}`, icon: <ServerCog className="h-4 w-4" />, className: 'right-[5%] top-[18%]' },
@@ -234,7 +234,7 @@ function OperationsRadar({ metrics }: { metrics: ReturnType<typeof buildSecurity
   )
 }
 
-function CapabilityStrip({ metrics }: { metrics: ReturnType<typeof buildSecurityDashboardData>['metrics'] }) {
+function CapabilityStrip({ metrics }: { metrics: SecurityDashboardMetrics }) {
   const strips = [
     { label: '分类分级', value: metrics.classificationCoverage, color: '#3b82f6' },
     { label: '接入完整性', value: metrics.integrityPassRate, color: '#14b8a6' },
@@ -426,37 +426,144 @@ function PerformanceBars({ values }: { values: number[] }) {
   )
 }
 
+function SecurityDataFlow({ metrics, coreMetrics }: { metrics: SecurityDashboardMetrics; coreMetrics: SecurityDashboardCoreMetric[] }) {
+  const metricValue = (key: SecurityDashboardCoreMetric['key']) => coreMetrics.find((item) => item.key === key)?.value ?? 0
+  const groups = [
+    { id: 'source', x: 20, width: 220, title: '中台数据源', value: `${metrics.sourceCount} 个来源`, tone: 'cyan' },
+    { id: 'validation', x: 260, width: 260, title: '接入校验', value: `完整性 ${metrics.integrityPassRate}%`, tone: 'blue' },
+    { id: 'control', x: 540, width: 260, title: '数据管控', value: `${metrics.resourceCount} 项资源`, tone: 'green' },
+    { id: 'access', x: 820, width: 280, title: '访问控制', value: `${metrics.activePolicies} 条启用策略`, tone: 'amber' },
+    { id: 'subject', x: 1120, width: 340, title: '访问主体', value: '典型访问对象', tone: 'violet' },
+  ] as const
+  const subNodes = [
+    { x: 40, y: 170, width: 180, height: 64, title: '量测数据', value: '中台统一供给', tone: 'cyan' },
+    { x: 295, y: 80, width: 190, height: 64, title: '安全传输', value: '运行正常', tone: 'blue' },
+    { x: 295, y: 180, width: 190, height: 64, title: '完整性校验', value: `${metrics.integrityPassRate}%`, tone: 'blue' },
+    { x: 295, y: 280, width: 190, height: 64, title: '数据采样', value: '运行正常', tone: 'blue' },
+    { x: 575, y: 80, width: 190, height: 64, title: '分类分级', value: `覆盖 ${metrics.classificationCoverage}%`, tone: 'green' },
+    { x: 575, y: 180, width: 190, height: 64, title: '数据档案', value: `${metrics.resourceCount} 项资源`, tone: 'green' },
+    { x: 575, y: 280, width: 190, height: 64, title: '安全策略', value: `${metrics.activePolicies} 条关联`, tone: 'amber' },
+    { x: 865, y: 80, width: 190, height: 64, title: '同态加密', value: `${metrics.homomorphicTaskCount} 个任务`, tone: 'violet' },
+    { x: 865, y: 180, width: 190, height: 64, title: '访问策略', value: `${metrics.activePolicies} 条启用`, tone: 'amber' },
+    { x: 865, y: 280, width: 190, height: 64, title: '风险事件', value: `${metricValue('risks')} 项事件`, tone: 'red' },
+    { x: 1195, y: 70, width: 190, height: 52, title: '跨域访问应用', value: '密态计算场景', tone: 'violet' },
+    { x: 1195, y: 150, width: 190, height: 52, title: '网上电网', value: '内部应用', tone: 'violet' },
+    { x: 1195, y: 230, width: 190, height: 52, title: '数智吉电', value: '内部应用', tone: 'violet' },
+    { x: 1195, y: 310, width: 190, height: 52, title: '其他业务应用', value: '51 套应用场景', tone: 'violet' },
+  ] as const
+  const paths = [
+    { id: 'flow-source-transport', d: 'M220 202 C255 202 260 112 295 112', delay: '0s' },
+    { id: 'flow-transport-integrity', d: 'M390 144 V180', delay: '-0.25s' },
+    { id: 'flow-integrity-sampling', d: 'M390 244 V280', delay: '-0.5s' },
+    { id: 'flow-sampling-classification', d: 'M485 312 C530 312 530 112 575 112', delay: '-0.75s' },
+    { id: 'flow-classification-archive', d: 'M670 144 V180', delay: '-1s' },
+    { id: 'flow-archive-policy', d: 'M670 244 V280', delay: '-1.25s' },
+    { id: 'flow-archive-homomorphic', d: 'M765 212 C815 212 815 112 865 112', delay: '-1.5s' },
+    { id: 'flow-policy-access', d: 'M765 312 C815 312 815 212 865 212', delay: '-1.65s' },
+    { id: 'flow-homomorphic-access', d: 'M960 144 V180', delay: '-1.75s' },
+    { id: 'flow-access-risk', d: 'M960 244 V280', delay: '-2s' },
+    { id: 'flow-homomorphic-cross-domain', d: 'M1055 112 C1115 112 1130 96 1195 96', delay: '-2.25s' },
+    { id: 'flow-access-online-grid', d: 'M1055 212 C1115 212 1130 176 1195 176', delay: '-2.5s' },
+    { id: 'flow-access-digital-jilin', d: 'M1055 212 C1115 212 1130 256 1195 256', delay: '-2.75s' },
+    { id: 'flow-access-business-apps', d: 'M1055 212 C1125 212 1120 336 1195 336', delay: '-3s' },
+  ]
+
+  return (
+    <section className="security-data-flow relative overflow-hidden border-y border-[rgba(var(--theme-soft-rgb),0.24)] bg-[color-mix(in_srgb,var(--surface-raised)_90%,transparent)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-4">
+        <div className="flex items-center gap-3">
+          <span className="security-dashboard-live-dot h-2.5 w-2.5 rounded-full bg-[#22d3ee]" />
+          <h2 className="text-[0.875rem] font-semibold text-[var(--text-main)]">数据安全运行链路</h2>
+        </div>
+        <span className="text-[0.75rem] text-[var(--text-muted)]">实时数据流向</span>
+      </div>
+      <div className="overflow-x-auto px-3 pb-3 pt-1">
+        <svg viewBox="0 0 1480 420" className="mx-auto block h-auto min-w-[1280px] w-full" role="img" aria-label="中台量测数据经过接入校验、数据管控和访问控制后，为网上电网、数智吉电、其他业务应用和跨域访问应用提供安全数据支撑">
+          <defs>
+            <pattern id="security-flow-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+              <path d="M24 0H0V24" fill="none" stroke="rgba(98,166,255,0.08)" strokeWidth="1" />
+            </pattern>
+            <filter id="security-flow-glow" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="3" result="blur" />
+              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+            </filter>
+            <marker id="security-flow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+              <path d="M0 0L8 4L0 8Z" fill="var(--primary)" />
+            </marker>
+          </defs>
+          <rect width="1480" height="420" fill="url(#security-flow-grid)" />
+
+          {groups.map((group) => (
+            <g key={group.id} className={`security-flow-group security-flow-group-${group.tone}`}>
+              <rect x={group.x} y="25" width={group.width} height="370" rx="8" className="security-flow-group-shell" />
+              <text x={group.x + 20} y="55" className="security-flow-group-title">{group.title}</text>
+              <text x={group.x + group.width - 20} y="55" textAnchor="end" className="security-flow-group-value">{group.value}</text>
+            </g>
+          ))}
+
+          {paths.map((path) => (
+            <g key={path.id}>
+              <path className="security-flow-track" d={path.d} />
+              <path id={path.id} className="security-flow-line" d={path.d} markerEnd="url(#security-flow-arrow)" />
+              <circle className="security-flow-particle" r="4" filter="url(#security-flow-glow)">
+                <animateMotion dur="2.8s" begin={path.delay} repeatCount="indefinite">
+                  <mpath href={`#${path.id}`} />
+                </animateMotion>
+              </circle>
+            </g>
+          ))}
+
+          {subNodes.map((node, index) => (
+            <g key={node.title} className={`security-flow-node security-flow-subnode security-flow-node-${node.tone}`} style={{ animationDelay: `${120 + index * 60}ms` }}>
+              <rect x={node.x} y={node.y} width={node.width} height={node.height} rx="6" className="security-flow-subnode-shell" />
+              <circle cx={node.x + 18} cy={node.y + 20} r="4" className="security-flow-node-status" />
+              <text x={node.x + 30} y={node.y + 25} className="security-flow-subnode-title">{node.title}</text>
+              <text x={node.x + 16} y={node.y + 46} className="security-flow-node-value">{node.value}</text>
+            </g>
+          ))}
+
+        </svg>
+      </div>
+    </section>
+  )
+}
+
 export function SecurityDashboardPage() {
   const location = useLocation()
   const isEmbedMode = readEmbedMode(location.search)
   const withEmbed = (path: string) => appendEmbedToPath(path, isEmbedMode)
-  const {
-    data: { catalogItems },
-    isLoading: isPortalLoading,
-  } = usePortalContext()
-  const { data: securityPolicies, isLoading: isSecurityLoading } = useSecurityGovernancePolicies(true)
-  const { data: securitySources, isLoading: isSourceLoading } = useSecurityDataSources(true)
-  const { data: confidentialTasks, isLoading: isTaskLoading } = useConfidentialTasks(true)
+  const [dashboardData, setDashboardData] = useState(EMPTY_SECURITY_DASHBOARD_V3_DATA)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      setDashboardData(await loadSecurityDashboardV3Data())
+    } catch (currentError) {
+      setError(toErrorMessage(currentError, '安全态势数据读取失败'))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+  useEffect(() => { void refresh() }, [refresh])
 
-  const joinedItems = useMemo(
-    () => joinSecurityGovernanceItems(securityPolicies, catalogItems),
-    [catalogItems, securityPolicies],
-  )
-  const dashboardData = useMemo(
-    () => buildSecurityDashboardData(joinedItems, { sources: securitySources, tasks: confidentialTasks }),
-    [confidentialTasks, joinedItems, securitySources],
-  )
   const { metrics, moduleSummaries, realtimeItems, events, abnormalTypes, topActors, sourceTrend, sourceHealth } = dashboardData
 
-  const loading = isPortalLoading || isSecurityLoading || isSourceLoading || isTaskLoading
+  const coreMetricIcons: Record<SecurityDashboardCoreMetric['key'], React.ReactNode> = {
+    resources: <Workflow className="h-5 w-5" />, apis: <DatabaseZap className="h-5 w-5" />, policies: <SlidersHorizontal className="h-5 w-5" />,
+    requests: <Activity className="h-5 w-5" />, rejects: <ShieldAlert className="h-5 w-5" />, risks: <Bell className="h-5 w-5" />, tasks: <LockKeyhole className="h-5 w-5" />,
+  }
 
   return (
     <div className="space-y-5">
+      <SecurityDataFlow metrics={metrics} coreMetrics={dashboardData.coreMetrics} />
       {loading ? (
         <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-5 py-10 text-center text-[0.875rem] text-[var(--text-muted)]">
           正在汇聚安全态势指标...
         </div>
       ) : null}
+      {error ? <div className="rounded-[8px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-5 py-3 text-[0.875rem] text-[var(--status-danger-text)]">{error}</div> : null}
 
       <section className="security-dashboard-hero relative overflow-hidden rounded-[8px] border border-[rgba(var(--theme-soft-rgb),0.24)] bg-[linear-gradient(135deg,var(--surface-hero-start),var(--surface-hero-end))] p-5 shadow-[var(--shadow-elevated)]">
         <div className="security-dashboard-hero-grid" />
@@ -471,10 +578,11 @@ export function SecurityDashboardPage() {
                 <h1 className="mt-3 text-[1.55rem] font-semibold leading-tight text-[var(--text-main)]">安全态势看板</h1>
                 <div className="mt-1 text-[0.8125rem] text-[var(--text-secondary)]">聚合数据接入、资源管控、访问控制与同态加密的核心运行指标。</div>
               </div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-raised)_82%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--text-secondary)]">
+              <button type="button" onClick={() => void refresh()} className="inline-flex items-center gap-2 rounded-[8px] border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-raised)_82%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--text-secondary)]">
                 <CheckCircle2 className="h-4 w-4 text-[#10b981]" />
-                后台数据实时汇聚
-              </div>
+                真实数据已汇聚
+                <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+              </button>
             </div>
 
             <OperationsRadar metrics={metrics} />
@@ -499,7 +607,7 @@ export function SecurityDashboardPage() {
               <CapabilityStrip metrics={metrics} />
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-5">
               {moduleSummaries.map((item) => (
                 <ModuleSummaryCard key={item.id} item={item} withEmbed={withEmbed} />
               ))}
@@ -509,45 +617,19 @@ export function SecurityDashboardPage() {
       </section>
 
       <SectionPanel title="实时运行情况">
-        <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-5">
           {realtimeItems.map((item) => (
             <RealtimeStatusCard key={item.label} item={item} />
           ))}
         </div>
       </SectionPanel>
 
-      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-        <MetricCard
-          title="今日数据接入量"
-          value={`${formatCount(metrics.accessIngest)}`}
-          helper={`来自 ${formatCount(metrics.resourceCount)} 个资源，敏感字段 ${formatCount(metrics.sensitiveFields)} 个`}
-          values={metrics.loadBars}
-          icon={<DatabaseZap className="h-5 w-5" />}
-        />
-        <MetricCard
-          title="访问请求总数"
-          value={formatCount(metrics.requests)}
-          helper={`需审批 ${formatCount(metrics.blockedEstimate)} 项，启用策略占比 ${metrics.enabledPolicyRatio}%`}
-          values={metrics.loadBars}
-          icon={<Activity className="h-5 w-5" />}
-          tone="green"
-        />
-        <MetricCard
-          title="活跃安全策略数"
-          value={formatCount(metrics.activePolicies)}
-          helper={`${metrics.pendingPolicies} 条策略待审批`}
-          values={metrics.loadBars}
-          icon={<SlidersHorizontal className="h-5 w-5" />}
-          tone="amber"
-        />
-        <MetricCard
-          title="安全告警数"
-          value={formatCount(metrics.alerts)}
-          helper={`重要/核心资源 ${formatCount(metrics.importantResources)} 个，脱敏覆盖 ${metrics.desensitizationCoverage}%`}
-          values={metrics.loadBars}
-          icon={<ShieldAlert className="h-5 w-5" />}
-          tone="red"
-        />
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+        {dashboardData.coreMetrics.map((item) => (
+          <Link key={item.key} to={withEmbed(item.path)}>
+            <MetricCard title={item.label} value={formatCount(item.value)} helper={item.helper} values={item.trend} icon={coreMetricIcons[item.key]} tone={item.tone} />
+          </Link>
+        ))}
       </div>
 
       <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
@@ -598,7 +680,7 @@ export function SecurityDashboardPage() {
               </div>
             ) : null}
           </div>
-          <Link to={withEmbed('/security-governance/audit/log-query')} className="mt-4 inline-flex text-[0.8125rem] font-medium text-[var(--primary)]">
+          <Link to={withEmbed('/security-governance/access/audit')} className="mt-4 inline-flex text-[0.8125rem] font-medium text-[var(--primary)]">
             查看全部日志
           </Link>
         </SectionPanel>
@@ -669,7 +751,7 @@ export function SecurityDashboardPage() {
                   <span className="text-[var(--text-muted)] lg:hidden">最后接入</span>
                   {source.time}
                 </span>
-                <button className="text-left text-[var(--primary)]">{source.action}</button>
+                <Link to={withEmbed('/security-governance/ingest/sources')} className="text-left text-[var(--primary)]">{source.action}</Link>
               </div>
             ))}
             {sourceHealth.length === 0 ? (
@@ -680,7 +762,7 @@ export function SecurityDashboardPage() {
           </div>
         </SectionPanel>
 
-        <SectionPanel title="策略引擎性能监控" className="scroll-mt-6">
+        <SectionPanel title="访问策略运行" className="scroll-mt-6">
           <span id="policy-engine" className="block -translate-y-6" />
           <div className="grid gap-3 sm:grid-cols-2">
             <GaugeMeter label="策略启用率" value={metrics.enabledPolicyRatio} tone="blue" />
@@ -704,7 +786,7 @@ export function SecurityDashboardPage() {
           </div>
           <div className="mt-5">
             <div className="mb-2 flex items-center justify-between text-[0.8125rem] text-[var(--text-secondary)]">
-              <span>最近24小时性能趋势</span>
+              <span>当前来源负载对比</span>
               <span>峰值 {metrics.loadBars.length ? Math.max(...metrics.loadBars) : 0}%</span>
             </div>
             <PerformanceBars values={metrics.loadBars} />

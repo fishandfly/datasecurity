@@ -7,12 +7,14 @@ const serviceLayoutSource = readFileSync(resolve(process.cwd(), 'src/layouts/ser
 const navigationSource = readFileSync(resolve(process.cwd(), 'src/lib/nocobase-portal-navigation.ts'), 'utf8')
 const defaultPrimaryNavSource = navigationSource.match(/const DEFAULT_PRIMARY_NAVIGATIONS:[\s\S]*?\n\]/)?.[0] ?? ''
 
-test('顶部导航默认按 Feature Plan 收敛为安全管控 feature，并由配置中心导航驱动', () => {
+test('顶部导航移除独立数据服务入口并保持安全管控模块顺序', () => {
   assert.match(serviceLayoutSource, /primaryNavigations\.map\(\(item\) => \(/)
   assert.match(
     defaultPrimaryNavSource,
-    /const DEFAULT_PRIMARY_NAVIGATIONS:[\s\S]*title: '安全态势看板'[\s\S]*target: '\/security-governance\/dashboard'[\s\S]*title: '数据接入管理'[\s\S]*target: '\/security-governance\/data-access\/source-config'[\s\S]*title: '数据资源管控'[\s\S]*target: '\/security-governance\/resources'[\s\S]*title: '访问控制管理'[\s\S]*target: '\/security-governance\/access-control\/classification'[\s\S]*title: '数据同态加密'[\s\S]*target: '\/security-governance\/homomorphic-encryption'/,
+    /const DEFAULT_PRIMARY_NAVIGATIONS:[\s\S]*title: '安全态势'[\s\S]*title: '接入校验'[\s\S]*title: '数据资源'[\s\S]*title: '标签管理'[\s\S]*title: '访问策略'[\s\S]*title: '风险事件'[\s\S]*title: '同态加密'/,
   )
+  assert.doesNotMatch(defaultPrimaryNavSource, /title: '数据服务'/)
+  assert.match(navigationSource, /EXCLUDED_PRIMARY_NAV_TARGETS = new Set\(\[[\s\S]*'\/security-governance\/resources\/apis'/)
   assert.doesNotMatch(defaultPrimaryNavSource, /key: 'nav_audit'/)
   assert.match(navigationSource, /EXCLUDED_PRIMARY_NAV_TARGETS = new Set\(\[[\s\S]*'\/security-governance\/audit\/log-query'[\s\S]*\]\)/)
   assert.doesNotMatch(defaultPrimaryNavSource, /title: '数据标签管理'[\s\S]*target: '\/security-governance\/config\/data-labels'/)

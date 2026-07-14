@@ -179,6 +179,39 @@ const items = [
   },
 ]
 
+test('新建资源尚无安全档案时仍进入资源列表', async () => {
+  const { joinSecurityGovernanceItems } = await loadSecurityGovernanceModule()
+  const joined = joinSecurityGovernanceItems([], [{
+    id: '8',
+    name: '吉林电网量测数据',
+    summary: '量测数据',
+    description: '',
+    department: '',
+    updateTime: '2026-07-14 10:36:04',
+    serviceTypeId: '102',
+    serviceType: '数据表',
+    mapPreview: null,
+    categoryId: '41',
+    category: '生产运行数据',
+    categoryAncestorIds: ['41'],
+    businessAttributeId: '',
+    businessAttribute: '',
+    businessAttributePath: '',
+    businessAttributeAncestorIds: [],
+    informationCategoryId: '',
+    informationCategory: '',
+    informationCategoryPath: '',
+    informationCategoryAncestorIds: [],
+    fieldCount: 0,
+  }])
+
+  assert.equal(joined.length, 1)
+  assert.equal(joined[0].resourceId, '8')
+  assert.equal(joined[0].name, '吉林电网量测数据')
+  assert.equal(joined[0].policyId, '')
+  assert.equal(joined[0].securityProfileStatus, 'unsubmitted')
+})
+
 test('buildSecurityGovernanceSnapshot 基于安全总表视角生成概览和筛选项', async () => {
   const { buildSecurityGovernanceSnapshot } = await loadSecurityGovernanceModule()
 

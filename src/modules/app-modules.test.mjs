@@ -50,8 +50,9 @@ test('数据安全管控门户只注册安全管控业务模块', () => {
   })
   assert.match(registrySource, /export const PORTAL_APP_MODULES = \[[\s\S]*SecurityGovernanceModule,[\s\S]*\] satisfies AppModule\[]/)
   assert.match(securityGovernanceRoutesSource, /<Route path="\/security-governance\/dashboard" element={<SecurityDashboardPage \/>} \/>/)
-  assert.match(securityGovernanceRoutesSource, /<Route path="\/security-governance\/resources" element={<SecurityGovernancePage \/>} \/>/)
-  assert.match(securityGovernanceRoutesSource, /<Route path="\/security-governance\/:id" element={<SecurityGovernanceDetailPage \/>} \/>/)
+  assert.match(securityGovernanceRoutesSource, /<Route path="\/security-governance\/resources" element={<Navigate to="\/security-governance\/resources\/catalog" replace \/>} \/>/)
+  assert.match(securityGovernanceRoutesSource, /<Route path="\/security-governance\/resources\/catalog" element={<SecurityGovernancePage \/>} \/>/)
+  assert.match(securityGovernanceRoutesSource, /<Route path="\/security-governance\/resources\/:id" element={<SecurityGovernanceDetailPage \/>} \/>/)
   assert.match(dataCatalogRoutesSource, /<Route path="\/personal-center" element={<PersonalCenterPage \/>} \/>/)
 })
 

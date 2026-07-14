@@ -184,9 +184,13 @@ export function joinSecurityGovernanceItems(
   catalogItems: CatalogItem[],
 ) {
   const catalogMap = new Map(catalogItems.map((item) => [item.id, item] as const))
+  const governedResourceIds = new Set<string>()
 
-  return policies.map((policy) => {
+  const governedItems = policies
+    .filter((policy) => policy.policyKind !== 'access_policy' && catalogMap.has(policy.resourceId))
+    .map((policy) => {
     const catalogItem = catalogMap.get(policy.resourceId)
+    governedResourceIds.add(policy.resourceId)
     return {
       id: policy.id,
       policyId: policy.id,
@@ -238,7 +242,63 @@ export function joinSecurityGovernanceItems(
       sensitiveFieldCount: policy.fieldSecurityStats.sensitiveFieldCount,
       importantFieldCount: policy.fieldSecurityStats.importantFieldCount,
     } satisfies SecurityGovernanceJoinedItem
-  })
+    })
+
+  const ungovernedItems = catalogItems
+    .filter((item) => !governedResourceIds.has(item.id))
+    .map((item) => ({
+      id: `resource-${item.id}`,
+      policyId: '',
+      resourceId: item.id,
+      name: item.name || '未命名资源',
+      summary: item.summary || item.description || '',
+      department: item.department || '',
+      updateTime: item.updateTime || '',
+      serviceTypeId: item.serviceTypeId || '',
+      serviceType: item.serviceType || '',
+      mapPreview: item.mapPreview || null,
+      categoryId: item.categoryId || '',
+      category: item.businessCategory || item.category || '',
+      categoryAncestorIds: item.categoryAncestorIds || [],
+      businessAttributeId: item.businessAttributeId || '',
+      businessAttribute: item.businessAttribute || '',
+      businessAttributePath: item.businessAttributePath || item.businessAttribute || '',
+      businessAttributeAncestorIds: item.businessAttributeAncestorIds || [],
+      informationCategoryId: item.informationCategoryId || '',
+      informationCategory: item.informationCategory || '',
+      informationCategoryPath: item.informationCategoryPath || item.informationCategory || '',
+      informationCategoryAncestorIds: item.informationCategoryAncestorIds || [],
+      securityCategoryId: '',
+      securityCategory: '未标注',
+      securityLevelId: '',
+      securityLevel: '未标注',
+      dataSubjectTypeId: '',
+      dataSubjectType: '未标注',
+      securityProfileStatus: 'unsubmitted',
+      securityReviewStatus: 'unsubmitted',
+      policyStatus: 'draft',
+      shareScope: '',
+      accessScope: '',
+      approvalMode: '',
+      desensitizationMode: '',
+      exportScope: '',
+      apiAuthMode: '',
+      importantDataFlag: false,
+      coreControlFlag: false,
+      openAllowed: false,
+      externalShareAllowed: false,
+      desensitizationRequired: false,
+      approvalRequired: false,
+      securityOwnerDept: '',
+      securityOwnerUserName: '',
+      assessmentBasis: '',
+      riskNotes: '',
+      fieldCount: item.fieldCount || 0,
+      sensitiveFieldCount: 0,
+      importantFieldCount: 0,
+    } satisfies SecurityGovernanceJoinedItem))
+
+  return [...governedItems, ...ungovernedItems]
 }
 
 function matchesKeyword(item: SecurityGovernanceJoinedItem, keyword: string) {

@@ -62,6 +62,7 @@ type RawSecurityPolicyRecord = {
   last_reviewed_at?: string | null
   next_review_at?: string | null
   policy_code?: string | null
+  policy_kind?: string | null
   policy_name?: string | null
   policy_source?: string | null
   policy_status?: string | null
@@ -86,6 +87,7 @@ type RawSecurityPolicyRecord = {
 
 type RawSecurityFieldRecord = Record<string, unknown> & {
   id?: number | string | null
+  resource_id?: number | string | null
   policy_id?: number | string | null
 }
 
@@ -176,6 +178,7 @@ export type SecurityGovernancePolicyRecord = {
   lastReviewedAt: string
   nextReviewAt: string
   policyCode: string
+  policyKind: string
   policyName: string
   policySource: string
   policyStatus: string
@@ -204,6 +207,24 @@ export type SecurityGovernancePolicyRecord = {
   remarks: string
   createdAt: string
   updatedAt: string
+}
+
+export function createEmptySecurityGovernancePolicy(resourceId: string, resourceName: string): SecurityGovernancePolicyRecord {
+  return {
+    id: '', resourceId, resourceName,
+    securityCategoryId: '', securityCategory: '', securityLevelId: '', securityLevel: '',
+    dataSubjectTypeId: '', dataSubjectType: '', securityOwnerUserId: '', securityOwnerUserName: '',
+    securityProfileStatus: 'unsubmitted', securityReviewStatus: 'unsubmitted', importantDataFlag: false, coreControlFlag: false,
+    shareScope: '', externalShareAllowed: false, openAllowed: false, desensitizationRequired: false, approvalRequired: false,
+    securityOwnerDept: '', assessmentBasis: '', riskNotes: '', lastReviewedAt: '', nextReviewAt: '',
+    policyCode: '', policyKind: 'resource_security_profile', policyName: '', policySource: '', policyStatus: 'draft',
+    accessScope: '', approvalMode: '', desensitizationMode: '', exportAllowed: false, exportScope: '',
+    apiAccessAllowed: false, apiAuthMode: '', effectiveFrom: '', effectiveTo: '',
+    fieldProfilesJson: [], fieldPoliciesJson: [], securityProfileJson: {}, policyDetailJson: {}, securityReviewJson: {},
+    fieldSecurityProfileRows: [], fieldSecurityPolicyRows: [], legacyPhysicalTableRows: [],
+    fieldSecurityStats: { totalFields: 0, sensitiveFieldCount: 0, importantFieldCount: 0 },
+    remarks: '', createdAt: '', updatedAt: '',
+  }
 }
 
 let securityGovernanceCache: SecurityGovernancePolicyRecord[] | null = null
@@ -575,6 +596,7 @@ function mapSecurityGovernancePolicy(record: RawSecurityPolicyRecord, persistedF
     lastReviewedAt: normalizeText(record.last_reviewed_at),
     nextReviewAt: normalizeText(record.next_review_at),
     policyCode: normalizeText(record.policy_code),
+    policyKind: normalizeText(record.policy_kind),
     policyName: normalizeText(record.policy_name),
     policySource: normalizeText(record.policy_source),
     policyStatus: normalizeText(record.policy_status),
@@ -636,7 +658,7 @@ async function fetchSecurityGovernancePoliciesInternal() {
           const response = await nocobaseClient.resource(SECURITY_FIELD_COLLECTION).list({
             page,
             pageSize,
-            sort: ['policy_id', 'seq'],
+            sort: ['resource_id', 'seq'],
           })
           const payload = response.data as RawListResponse<RawSecurityFieldRecord>
           return {
@@ -646,15 +668,24 @@ async function fetchSecurityGovernancePoliciesInternal() {
         }, SECURITY_POLICY_PAGE_SIZE)
       : Promise.resolve([] as RawSecurityFieldRecord[]),
   ])
+  const fieldsByResource = new Map<string, RawSecurityFieldRecord[]>()
   const fieldsByPolicy = new Map<string, RawSecurityFieldRecord[]>()
   persistedFields.forEach((field) => {
+    const resourceId = normalizeId(field.resource_id)
     const policyId = normalizeId(field.policy_id)
-    if (!policyId) return
-    fieldsByPolicy.set(policyId, [...(fieldsByPolicy.get(policyId) ?? []), field])
+    if (resourceId) {
+      fieldsByResource.set(resourceId, [...(fieldsByResource.get(resourceId) ?? []), field])
+    }
+    if (policyId) {
+      fieldsByPolicy.set(policyId, [...(fieldsByPolicy.get(policyId) ?? []), field])
+    }
   })
 
   return rows
-    .map((row: RawSecurityPolicyRecord) => mapSecurityGovernancePolicy(row, fieldsByPolicy.get(normalizeId(row.id)) ?? []))
+    .map((row: RawSecurityPolicyRecord) => mapSecurityGovernancePolicy(
+      row,
+      fieldsByResource.get(normalizeId(row.resource_id)) ?? fieldsByPolicy.get(normalizeId(row.id)) ?? [],
+    ))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt, 'zh-CN', { numeric: true }))
 }
 
@@ -671,7 +702,19 @@ async function fetchSecurityGovernancePolicyByFilter(
   })
   const payload = response.data as RawListResponse<RawSecurityPolicyRecord>
   const row = payload.data?.[0]
-  return row ? mapSecurityGovernancePolicy(row) : null
+  if (!row) return null
+
+  const resourceId = normalizeId(row.resource_id)
+  if (!resourceId) return mapSecurityGovernancePolicy(row)
+
+  const fieldResponse = await nocobaseClient.resource(SECURITY_FIELD_COLLECTION).list({
+    page: 1,
+    pageSize: SECURITY_POLICY_PAGE_SIZE,
+    sort: 'seq',
+    filter: { resource_id: resourceId },
+  })
+  const fieldPayload = fieldResponse.data as RawListResponse<RawSecurityFieldRecord>
+  return mapSecurityGovernancePolicy(row, fieldPayload.data ?? [])
 }
 
 export function clearSecurityGovernanceCache() {
@@ -716,28 +759,29 @@ export async function fetchSecurityGovernancePolicies({ force }: { force?: boole
   return request
 }
 
-export async function fetchSecurityGovernancePolicyDetail(policyIdOrResourceId: string) {
+export async function fetchSecurityGovernancePolicyDetail(policyIdOrResourceId: string, resourceOnly = false) {
   const normalizedId = normalizeId(policyIdOrResourceId)
   if (!normalizedId) {
     throw new Error('缺少安全档案标识')
   }
 
-  const cached = securityGovernanceCache?.find(
-    (item) => item.id === normalizedId || item.resourceId === normalizedId,
-  )
+  const cached = securityGovernanceCache?.find((item) => item.resourceId === normalizedId)
+    ?? (resourceOnly ? undefined : securityGovernanceCache?.find((item) => item.id === normalizedId))
   if (cached) {
     return cached
   }
 
   try {
-    const byPolicyId = await fetchSecurityGovernancePolicyByFilter({ id: normalizedId })
-    if (byPolicyId) {
-      return byPolicyId
-    }
-
     const byResourceId = await fetchSecurityGovernancePolicyByFilter({ resource_id: normalizedId })
     if (byResourceId) {
       return byResourceId
+    }
+
+    if (!resourceOnly) {
+      const byPolicyId = await fetchSecurityGovernancePolicyByFilter({ id: normalizedId })
+      if (byPolicyId) {
+        return byPolicyId
+      }
     }
   } catch (error) {
     if (!isDemoFallbackEnabled()) {
@@ -745,7 +789,8 @@ export async function fetchSecurityGovernancePolicyDetail(policyIdOrResourceId: 
     }
     const fallback = createDemoSecurityPolicies()
     securityGovernanceCache = fallback
-    return fallback.find((item) => item.id === normalizedId || item.resourceId === normalizedId) ?? null
+    return fallback.find((item) => item.resourceId === normalizedId)
+      ?? (resourceOnly ? null : fallback.find((item) => item.id === normalizedId) ?? null)
   }
 
   return null
@@ -810,7 +855,7 @@ export function useSecurityGovernancePolicies(enabled: boolean) {
   )
 }
 
-export function useSecurityGovernancePolicyDetail(policyIdOrResourceId: string | undefined, enabled: boolean) {
+export function useSecurityGovernancePolicyDetail(policyIdOrResourceId: string | undefined, enabled: boolean, resourceOnly = false) {
   const normalizedId = normalizeId(policyIdOrResourceId)
   const [data, setData] = useState<SecurityGovernancePolicyRecord | null>(null)
   const [isLoading, setIsLoading] = useState(() => enabled && normalizedId.length > 0)
@@ -820,7 +865,7 @@ export function useSecurityGovernancePolicyDetail(policyIdOrResourceId: string |
     if (!normalizedId) return null
     setIsLoading(true)
     try {
-      const row = await fetchSecurityGovernancePolicyDetail(normalizedId)
+      const row = await fetchSecurityGovernancePolicyDetail(normalizedId, resourceOnly)
       setData(row)
       setError(row ? null : '未找到对应的安全档案记录')
       return row
@@ -831,15 +876,14 @@ export function useSecurityGovernancePolicyDetail(policyIdOrResourceId: string |
     } finally {
       setIsLoading(false)
     }
-  }, [normalizedId])
+  }, [normalizedId, resourceOnly])
 
   useEffect(() => {
     if (!enabled || !normalizedId) return
 
     let cancelled = false
-    const cached = securityGovernanceCache?.find(
-      (item) => item.id === normalizedId || item.resourceId === normalizedId,
-    )
+    const cached = securityGovernanceCache?.find((item) => item.resourceId === normalizedId)
+      ?? (resourceOnly ? undefined : securityGovernanceCache?.find((item) => item.id === normalizedId))
     if (cached) {
       setData(cached)
       setError(null)
@@ -848,7 +892,7 @@ export function useSecurityGovernancePolicyDetail(policyIdOrResourceId: string |
       setIsLoading(true)
     }
 
-    void fetchSecurityGovernancePolicyDetail(normalizedId)
+    void fetchSecurityGovernancePolicyDetail(normalizedId, resourceOnly)
       .then((row) => {
         if (cancelled) return
         setData(row)
@@ -868,7 +912,7 @@ export function useSecurityGovernancePolicyDetail(policyIdOrResourceId: string |
     return () => {
       cancelled = true
     }
-  }, [enabled, normalizedId])
+  }, [enabled, normalizedId, resourceOnly])
 
   return useMemo(
     () => ({

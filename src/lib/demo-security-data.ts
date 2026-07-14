@@ -85,6 +85,7 @@ function createCatalogItem(overrides: Partial<CatalogItem> & Pick<CatalogItem, '
   return {
     id,
     code,
+    resourceStatus: overrides.resourceStatus ?? 'enabled',
     name,
     categoryId,
     category: overrides.category ?? '量测采集数据',
@@ -263,6 +264,7 @@ export function createDemoSecurityPolicies(): SecurityGovernancePolicyRecord[] {
   return [
     {
       id: 'sg-grid-meter-curve-15m',
+      policyKind: 'resource_profile',
       resourceId: 'grid-meter-curve-15m',
       resourceName: '用户侧十五分钟负荷曲线',
       securityCategoryId: 'personal-sensitive',
@@ -375,6 +377,7 @@ export function createDemoSecurityPolicies(): SecurityGovernancePolicyRecord[] {
     },
     {
       id: 'sg-grid-dispatch-realtime',
+      policyKind: 'resource_profile',
       resourceId: 'grid-dispatch-realtime',
       resourceName: '调度实时运行量测',
       securityCategoryId: 'core-operation',

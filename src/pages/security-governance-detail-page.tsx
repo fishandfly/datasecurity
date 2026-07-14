@@ -1,37 +1,25 @@
-import { ArrowLeft, Database, DatabaseZap, FileSearch, FolderTree, LockKeyhole, Network, PencilLine, RefreshCw, ScrollText, ShieldCheck, Workflow } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
-import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import {
-  SecurityGovernanceFieldEditDialog,
-  SecurityGovernanceProfileEditDialog,
-} from '../components/security-governance-edit-dialog'
-import { LatestDataPreviewPanel } from '../components/latest-data-preview-panel'
+import { ArrowLeft, Database, DatabaseZap, FileSearch, FolderTree, LockKeyhole, Network, ScrollText, ShieldCheck } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { LineageRelationGraph } from '../components/lineage-relation-graph'
+import { ResourceFieldsPanel } from '../components/resource-fields-panel'
+import { ResourceApisPanel } from '../components/resource-apis-panel'
+import { ResourceAccessPoliciesPanel } from '../components/resource-access-policies-panel'
+import { ResourceHomomorphicPanel } from '../components/resource-homomorphic-panel'
 import { ScenicPanel, StatCard, TopicPill } from '../components/ui'
 import { canManageCatalogResources } from '../lib/admin-role'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
-import { useSecurityGovernancePolicyDetail } from '../lib/nocobase-security-governance'
 import { connectStatusMeta, formatMB, formatNumber, useLatestResourceBatchStat } from '../lib/nocobase-stat-data'
 import type { CatalogItem } from '../lib/nocobase-portal-data'
 import { usePortalContext } from '../lib/portal-context'
-import {
-  resolveSecurityBooleanLabel,
-  resolveSecurityScopeLabel,
-  resolveSecurityStatusLabel,
-} from '../lib/security-governance'
+import { useResourceSecurityRelations } from '../lib/resource-security-relations'
+import { formatSecurityV3Value } from '../lib/nocobase-security-v3'
 
 type SecurityGovernanceDetailLocationState = {
   returnTo?: string
 }
 
-type SecurityGovernanceDetailTabKey = 'overview' | 'fieldSecurity' | 'status' | 'physicalTables' | 'latestPreview' | 'lineage'
-
-type PhysicalTableRowState = {
-  tableName: string
-  sourceSystem: string
-  businessTimeField: string
-  isBaseline: boolean
-}
+type SecurityGovernanceDetailTabKey = 'overview' | 'resourceFields' | 'apiInfo' | 'accessPolicies' | 'homomorphic' | 'accessInfo' | 'status' | 'lineage'
 
 function splitPhysicalTableNames(value: string) {
   return value
@@ -227,28 +215,71 @@ function normalizeText(value: unknown, fallback = '') {
   return normalized.length > 0 ? normalized : fallback
 }
 
-function formatDateText(value: string | null | undefined) {
-  const normalized = normalizeText(value)
-  if (!normalized) return '未标注'
-  const date = new Date(normalized)
-  if (Number.isNaN(date.getTime())) return normalized
-  const year = date.getFullYear()
-  const month = `${date.getMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getDate()}`.padStart(2, '0')
-  return `${year}-${month}-${day}`
+function normalizeObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
+  if (typeof value !== 'string' || !value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
 }
 
-function formatDateTimeText(value: string | null | undefined) {
-  const normalized = normalizeText(value)
-  if (!normalized) return '未标注'
-  const date = new Date(normalized)
-  if (Number.isNaN(date.getTime())) return normalized
-  const year = date.getFullYear()
-  const month = `${date.getMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getDate()}`.padStart(2, '0')
-  const hour = `${date.getHours()}`.padStart(2, '0')
-  const minute = `${date.getMinutes()}`.padStart(2, '0')
-  return `${year}-${month}-${day} ${hour}:${minute}`
+function normalizeArray(value: unknown) {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return []
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function formatDateTime(value: unknown) {
+  const date = new Date(String(value || ''))
+  return Number.isNaN(date.getTime()) ? '未产生' : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function sourceTypeLabel(value: unknown) {
+  return {
+    validation_database: '验证数据库',
+    existing_api: '已有 API',
+    realtime_db: '实时数据库',
+    history_db: '历史数据库',
+    third_party_api: '第三方 API',
+    data_warehouse: '数据仓库',
+    yongcai20: '用采 2.0',
+    dispatch_cloud: '调控云',
+  }[String(value)] || formatSecurityV3Value(value)
+}
+
+function sourceSecuritySummary(source: Record<string, unknown>) {
+  const config = normalizeObject(source.security_config_json)
+  const options = normalizeObject(source.connection_options_json)
+  const encrypted = config.encryptionEnabled ?? config.encryption_enabled ?? options.ssl
+  const integrity = config.integrityEnabled ?? config.integrity_enabled
+  return {
+    transport: encrypted ? `已启用（${String(config.encryptionAlgorithm ?? config.encryption_algorithm ?? (options.ssl ? 'TLS' : '受控加密'))}）` : '未启用',
+    integrity: integrity ? `已启用（${String(config.checksumAlgorithm ?? config.checksum_algorithm ?? '校验摘要')}）` : '未启用',
+    readOnly: options.readOnly === true || options.read_only === true ? '只读接入' : '未限制只读',
+    timeout: `${Number(options.timeoutSeconds ?? options.timeout_seconds ?? config.timeoutSeconds ?? 0) || '-'} 秒`,
+  }
+}
+
+function validationRuleSummary(source: Record<string, unknown>) {
+  const rules = normalizeObject(source.validation_rules_json)
+  const required = normalizeArray(rules.required)
+  const ranges = normalizeObject(rules.numericRanges ?? rules.numeric_ranges)
+  const duplicateKeys = normalizeArray(rules.duplicateKeys ?? rules.duplicate_keys)
+  const parts = [
+    required.length ? `必填字段 ${required.length} 项` : '',
+    Object.keys(ranges).length ? `数值范围 ${Object.keys(ranges).length} 项` : '',
+    duplicateKeys.length ? `去重键 ${duplicateKeys.length} 项` : '',
+    rules.responseShape ? `响应结构 ${String(rules.responseShape)}` : '',
+  ].filter(Boolean)
+  return parts.join(' / ') || '未配置接入校验规则'
 }
 
 export function SecurityGovernanceDetailPage() {
@@ -256,23 +287,13 @@ export function SecurityGovernanceDetailPage() {
   const location = useLocation()
   const { id } = useParams()
   const [searchParams] = useSearchParams()
-  const [isEditOpen, setIsEditOpen] = useState(false)
-  const [isDataItemsEditOpen, setIsDataItemsEditOpen] = useState(false)
-  const [editSuccessMessage, setEditSuccessMessage] = useState('')
   const {
     data,
     isLoading: isPortalLoading,
     error: portalError,
-    refresh: refreshPortalData,
     session,
   } = usePortalContext()
   const { catalogItems } = data
-  const {
-    data: securityPolicy,
-    isLoading: isSecurityPolicyLoading,
-    error: securityPolicyError,
-    refresh: refreshSecurityPolicy,
-  } = useSecurityGovernancePolicyDetail(id, true)
   const isEmbedMode = readEmbedMode(location.search)
   const withEmbed = (path: string) => appendEmbedToPath(path, isEmbedMode)
   const locationState = (location.state ?? null) as SecurityGovernanceDetailLocationState | null
@@ -290,15 +311,20 @@ export function SecurityGovernanceDetailPage() {
       navigate(-1)
       return
     }
-    navigate(withEmbed('/security-governance'))
+    navigate(withEmbed('/security-governance/resources/catalog'))
   }
 
-  const item = catalogItems.find((entry) => entry.id === securityPolicy?.resourceId)
+  const item = catalogItems.find((entry) => entry.id === id)
   const statEnabled = !isPortalLoading && Boolean(item)
-  const { data: latestBatchStat, isLoading: isLatestBatchStatLoading, error: latestBatchStatError } =
+  const { data: latestBatchStat, error: latestBatchStatError } =
     useLatestResourceBatchStat(item?.id, statEnabled)
-  const isLoading = isPortalLoading || isSecurityPolicyLoading
-  const error = securityPolicyError || portalError || null
+  const {
+    data: securityRelations,
+    isLoading: isSecurityRelationsLoading,
+    error: securityRelationsError,
+  } = useResourceSecurityRelations(item?.id, statEnabled)
+  const isLoading = isPortalLoading
+  const error = portalError
 
   if (isLoading) {
     return <div className="py-12 text-center text-[0.875rem] text-[var(--text-muted)]">正在加载安全管控详情...</div>
@@ -310,10 +336,6 @@ export function SecurityGovernanceDetailPage() {
         {error}
       </div>
     )
-  }
-
-  if (!securityPolicy) {
-    return <Navigate to={withEmbed('/security-governance')} replace />
   }
 
   if (!item) {
@@ -338,18 +360,16 @@ export function SecurityGovernanceDetailPage() {
     latestStatRecord?.metainfo.business_time_status ?? '',
     Boolean(baselineBusinessTimeField),
   )
-  const latestPreviewBaselineTableName = physicalTableState.baseline
-    || physicalTableState.rows[0]?.tableName
-    || splitPhysicalTableNames(item.sourceTable)[0]
-    || item.sourceTable
   const canManageResources = canManageCatalogResources(session?.user.roles)
   const detailTabs: Array<[SecurityGovernanceDetailTabKey, string]> = [
-    ['overview', '安全管控信息'],
-    ['fieldSecurity', '字段安全'],
+    ['overview', '基本信息'],
+    ['resourceFields', '资源字段'],
+    ['apiInfo', 'API 信息'],
+    ['accessPolicies', '访问策略'],
+    ['homomorphic', '同态加密'],
+    ['accessInfo', '安全接入'],
     ['lineage', '血缘关系'],
     ['status', '安全状态'],
-    ['physicalTables', '物理表'],
-    ['latestPreview', '最新预览'],
   ]
   const activeTab = detailTabs.some(([key]) => key === requestedTab)
     ? (requestedTab as SecurityGovernanceDetailTabKey)
@@ -357,61 +377,41 @@ export function SecurityGovernanceDetailPage() {
 
   const overviewMetrics = [
     {
-      key: 'securityCategory',
-      title: '安全分类',
-      value: securityPolicy.securityCategory || '未标注',
+      key: 'fields',
+      title: '字段数量',
+      value: `${formatNumber(latestStatRecord?.metainfo.field_count ?? item.fieldCount ?? 0)} 个`,
+      tone: 'blue' as const,
+      icon: <Database className="h-4 w-4" />,
+    },
+    {
+      key: 'apiVisits',
+      title: 'API 访问次数',
+      value: `${formatNumber(securityRelations.decisionLogs.length)} 次`,
+      tone: 'green' as const,
+      icon: <DatabaseZap className="h-4 w-4" />,
+    },
+    {
+      key: 'policies',
+      title: '访问策略数量',
+      value: `${formatNumber(securityRelations.accessPolicies.length)} 条`,
       tone: 'blue' as const,
       icon: <ShieldCheck className="h-4 w-4" />,
     },
     {
-      key: 'securityLevel',
-      title: '安全等级',
-      value: securityPolicy.securityLevel || '未标注',
+      key: 'ingestSamples',
+      title: '接入抽样数量',
+      value: latestStatRecord ? `${formatNumber(latestStatRecord.metainfo.record_count ?? 0)} 条` : '未统计',
       tone: 'green' as const,
-      icon: <LockKeyhole className="h-4 w-4" />,
-    },
-    {
-      key: 'reviewStatus',
-      title: '复核状态',
-      value: resolveSecurityStatusLabel(securityPolicy.securityReviewStatus),
-      tone: 'blue' as const,
-      icon: <RefreshCw className="h-4 w-4" />,
-    },
-    {
-      key: 'importantData',
-      title: '重要数据',
-      value: resolveSecurityBooleanLabel(securityPolicy.importantDataFlag),
-      tone: 'green' as const,
-      icon: <Database className="h-4 w-4" />,
+      icon: <Network className="h-4 w-4" />,
     },
   ]
 
-  const physicalTableCount = securityPolicy.legacyPhysicalTableRows.length > 0
-    ? securityPolicy.legacyPhysicalTableRows.length
-    : physicalTableState.rows.length
-  const accessScopeLabel = resolveSecurityScopeLabel(securityPolicy.accessScope)
-  const shareScopeLabel = resolveSecurityScopeLabel(securityPolicy.shareScope)
-  const approvalModeLabel = resolveSecurityScopeLabel(securityPolicy.approvalMode)
-  const desensitizationModeLabel = resolveSecurityScopeLabel(securityPolicy.desensitizationMode)
-  const exportScopeLabel = resolveSecurityScopeLabel(securityPolicy.exportScope)
-  const apiAuthModeLabel = resolveSecurityScopeLabel(securityPolicy.apiAuthMode)
-  const controlFlagLabel = [
-    securityPolicy.importantDataFlag ? '重要数据' : '',
-    securityPolicy.coreControlFlag ? '核心管控对象' : '',
-  ].filter(Boolean).join(' / ') || '普通资源'
-
   const infoRows = [
+    ['资源编码', item.code || '未标注', '资源状态', formatSecurityV3Value(item.resourceStatus)],
     ['数据分类', item.businessCategoryPath || item.category || '未标注', '业务分类', item.businessAttributePath || item.businessAttribute || '未标注'],
-    ['数据接入来源', item.sourceSystem || physicalTableState.sourceSystems.join('、') || item.department || '未标注', '物理表数量', `${physicalTableCount.toLocaleString()} 张`],
-    ['基准表', physicalTableState.baseline || '未识别', '业务时间字段', baselineBusinessTimeField || '未配置'],
-    ['安全分类', securityPolicy.securityCategory || '未标注', '安全等级', securityPolicy.securityLevel || '未标注'],
-    ['管控标识', controlFlagLabel, '策略状态', resolveSecurityStatusLabel(securityPolicy.policyStatus)],
-    ['安全责任部门', securityPolicy.securityOwnerDept || '未标注', '安全责任人', securityPolicy.securityOwnerUserName || '未标注'],
-    ['访问范围', accessScopeLabel, '共享范围', shareScopeLabel],
-    ['审批模式', approvalModeLabel, '脱敏方式', desensitizationModeLabel],
-    ['导出范围', exportScopeLabel, 'API 鉴权方式', apiAuthModeLabel],
-    ['复核计划', `最近 ${formatDateTimeText(securityPolicy.lastReviewedAt)} / 下次 ${formatDateText(securityPolicy.nextReviewAt)}`, '定级依据', securityPolicy.assessmentBasis || '未补充'],
-    ['风险说明', securityPolicy.riskNotes || '未补充', '', ''],
+    ['来源单位', item.department || '未标注', '来源系统', item.sourceSystem || physicalTableState.sourceSystems.join('、') || '未标注'],
+    ['更新周期', item.updateCycle || '未标注', '数据格式', item.format.join('、') || '未标注'],
+    ['资源说明', item.description || item.summary || '未补充', '', ''],
   ] as const
 
   const latestStatusCards = [
@@ -436,84 +436,35 @@ export function SecurityGovernanceDetailPage() {
       description: latestStatRecord ? `存储量 ${formatMB(latestStatRecord.metainfo.storage_bytes ?? 0)}` : '等待统计任务产出',
     },
   ]
-  const fieldPolicyByCode = new Map(
-    securityPolicy.fieldSecurityPolicyRows.map((row) => [row.fieldCode, row] as const),
-  )
-  const fieldSecurityRows = securityPolicy.fieldSecurityProfileRows.map((profile, index) => {
-    const matchedPolicy = fieldPolicyByCode.get(profile.fieldCode)
-    return {
-      id: String(profile.seq ?? index + 1),
-      fieldName: profile.fieldName || `字段${index + 1}`,
-      englishName: profile.fieldCode || '-',
-      fieldType: profile.dataType || '未标注',
-      informationCategory: [
-        profile.informationCategory,
-        profile.classificationLevel,
-        profile.securityLevel,
-      ].filter(Boolean).join(' / ') || '未标注',
-      securityPolicy: [
-        resolveSecurityScopeLabel(matchedPolicy?.requiredAccessScope ?? ''),
-        matchedPolicy?.requiredDesensitization ? resolveSecurityScopeLabel(matchedPolicy.requiredDesensitizationMode) : '',
-        matchedPolicy?.requiredExportAllowed ? resolveSecurityScopeLabel(matchedPolicy.requiredExportScope) : '',
-        matchedPolicy?.requiredApprovalRequired ? '需审批' : '',
-      ].filter((part) => part && part !== '未标注').join(' / ') || '未标注',
-      description: profile.description || '未补充',
-    }
-  })
   const dataAccessAlignmentItems: AlignmentItem[] = [
     {
       label: '数据源配置',
-      path: '/security-governance/data-access/source-config',
-      value: item.sourceSystem || physicalTableState.sourceSystems.join('、') || '未标注来源系统',
-      description: `${physicalTableCount.toLocaleString()} 张物理表 / ${baselineBusinessTimeField || '未配置业务时间字段'}`,
+      path: '/security-governance/ingest/sources',
+      value: `${securityRelations.sources.length} 个关联数据源`,
+      description: `已连接 ${securityRelations.sources.filter((source) => source.connection_status === 'connected').length} 个 / 最近校验 ${securityRelations.ingestLogs.length} 条`,
       icon: DatabaseZap,
     },
     {
       label: '接入规则配置',
-      path: '/security-governance/data-access/rule-config',
-      value: securityPolicy.policyName || securityPolicy.policyCode || `${securityPolicy.securityCategory || '资源'}接入规则`,
-      description: `${accessScopeLabel} / ${desensitizationModeLabel}`,
+      path: '/security-governance/ingest/validation-rules',
+      value: `${securityRelations.sources.length} 个数据源接入配置`,
+      description: '传输、完整性、只读连接与数据校验规则',
       icon: ShieldCheck,
     },
     {
-      label: '接入监控',
-      path: '/security-governance/data-access/monitoring',
+      label: '接入日志',
+      path: '/security-governance/ingest/logs',
       value: latestStatus?.label || '未产生统计',
       description: latestBatchStat.latestPeriodCode ? `统计批次 ${latestBatchStat.latestPeriodCode}` : businessTimeStatusLabel,
       icon: Network,
     },
   ]
-  const accessControlAlignmentItems: AlignmentItem[] = [
-    {
-      label: '数据分类分级',
-      path: '/security-governance/access-control/classification',
-      value: `${securityPolicy.securityCategory || '未标注'} / ${securityPolicy.securityLevel || '未标注'}`,
-      description: `${fieldSecurityRows.length.toLocaleString()} 个字段纳入字段安全档案`,
-      icon: Workflow,
-    },
-    {
-      label: '策略引擎配置',
-      path: '/security-governance/access-control/policy-engine',
-      value: securityPolicy.policyName || securityPolicy.policyCode || '访问控制策略',
-      description: `${accessScopeLabel} / ${approvalModeLabel} / ${exportScopeLabel}`,
-      icon: LockKeyhole,
-    },
-  ]
-  const homomorphicAlignmentItems: AlignmentItem[] = [
-    {
-      label: '数据同态加密',
-      path: '/security-governance/homomorphic-encryption',
-      value: securityPolicy.coreControlFlag ? '核心对象优先管控' : securityPolicy.importantDataFlag ? '重要数据受控' : '按策略执行',
-      description: `${desensitizationModeLabel} / ${apiAuthModeLabel}`,
-      icon: ShieldCheck,
-    },
-  ]
   const auditAlignmentItems: AlignmentItem[] = [
     {
-      label: '日志链路审计',
-      path: '/security-governance/audit/log-query',
-      value: resolveSecurityStatusLabel(securityPolicy.policyStatus),
-      description: `${securityPolicy.securityOwnerUserName || '未指定责任人'} / ${securityPolicy.securityOwnerDept || item.department || '未标注部门'} / ${shareScopeLabel}`,
+      label: '调用与决策日志',
+      path: '/security-governance/access/audit',
+      value: `${securityRelations.accessPolicies.filter((policy) => policy.publish_status === 'success').length} 条已发布策略`,
+      description: `${securityRelations.apis.filter((api) => api.publish_status === 'success').length} 个已发布 API / 未命中策略默认拒绝`,
       icon: FileSearch,
     },
   ]
@@ -535,12 +486,12 @@ export function SecurityGovernanceDetailPage() {
   }
 
   const tabsNav = (
-    <div className="flex gap-4 border-b border-[var(--line)]">
+    <div className="flex gap-4 overflow-x-auto border-b border-[var(--line)]">
       {detailTabs.map(([key, label]) => (
         <button
           type="button"
           key={key}
-          className={`relative -mb-px inline-flex min-h-12 items-center rounded-t-[14px] border border-transparent px-4 pb-3 pt-3 text-[0.9375rem] ${
+          className={`relative -mb-px inline-flex min-h-12 shrink-0 items-center whitespace-nowrap rounded-t-[14px] border border-transparent px-4 pb-3 pt-3 text-[0.9375rem] ${
             activeTab === key
               ? 'z-10 -translate-y-[1px] border-[rgba(var(--theme-soft-rgb),0.24)] border-b-[var(--surface-raised-strong)] bg-[linear-gradient(180deg,var(--surface-raised-strong),color-mix(in_srgb,var(--primary-soft)_72%,var(--surface-raised)))] font-semibold text-[var(--primary)] shadow-[0_16px_32px_rgba(var(--theme-soft-rgb),0.14)]'
               : 'text-[var(--text-secondary)] transition hover:-translate-y-[1px] hover:border-[var(--surface-outline)] hover:bg-[linear-gradient(180deg,var(--surface-raised),var(--surface-muted))] hover:text-[var(--primary)]'
@@ -561,19 +512,12 @@ export function SecurityGovernanceDetailPage() {
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="max-w-[920px] text-[1.875rem] font-semibold leading-[1.34] text-[var(--text-main)]">{securityPolicy.resourceName || item.name}</h1>
+                <h1 className="max-w-[920px] text-[1.875rem] font-semibold leading-[1.34] text-[var(--text-main)]">{item.name}</h1>
                 {latestStatus ? (
                   <span className={`inline-flex rounded-full border px-3 py-1 text-[0.8125rem] font-semibold ${latestStatus.toneClass}`}>{latestStatus.label}</span>
                 ) : null}
               </div>
 
-              <div className="mt-4 flex flex-wrap gap-2">
-                <TopicPill>安全档案编号：{securityPolicy.policyCode || securityPolicy.id}</TopicPill>
-                <TopicPill>资源编码：{item.code || '未标注'}</TopicPill>
-                <TopicPill>来源单位：{item.department || '未标注'}</TopicPill>
-                <TopicPill>安全分类：{securityPolicy.securityCategory || '未标注'}</TopicPill>
-                <TopicPill>安全等级：{securityPolicy.securityLevel || '未标注'}</TopicPill>
-              </div>
             </div>
 
             <button
@@ -582,7 +526,7 @@ export function SecurityGovernanceDetailPage() {
               className="inline-flex h-11 shrink-0 items-center gap-2 rounded-full border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 text-[0.8125rem] font-medium text-[var(--text-secondary)] shadow-[0_10px_24px_rgba(51,98,146,0.08)] transition hover:border-[var(--primary)] hover:bg-[var(--surface-raised-strong)] hover:text-[var(--primary)]"
             >
               <ArrowLeft className="h-4 w-4" />
-              返回安全管控
+              返回数据资源
             </button>
           </div>
 
@@ -603,29 +547,13 @@ export function SecurityGovernanceDetailPage() {
 
       {tabsNav}
 
-      {editSuccessMessage ? (
-        <div className="rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-4 py-3 text-[0.8125rem] text-[var(--status-success-text)]">
-          {editSuccessMessage}
-        </div>
-      ) : null}
-
       {activeTab === 'overview' ? (
         <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
           <SectionHeader
             icon={<ShieldCheck className="h-5 w-5" />}
-            title="安全管控信息"
+            title="基本信息"
             action={(
               <div className="flex flex-wrap items-center gap-2">
-                {canManageResources ? (
-                  <button
-                    type="button"
-                    onClick={() => setIsEditOpen(true)}
-                    className="inline-flex h-10 items-center gap-2 rounded-full border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 text-[0.8125rem] font-medium text-[var(--text-secondary)] transition hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                  >
-                    <PencilLine className="h-4 w-4" />
-                    编辑资源
-                  </button>
-                ) : null}
                 <Link
                   to={withEmbed(`/catalog/${item.id}`)}
                   state={{ returnTo: `${location.pathname}${location.search}` }}
@@ -669,72 +597,128 @@ export function SecurityGovernanceDetailPage() {
         </section>
       ) : null}
 
-      {activeTab === 'fieldSecurity' ? (
+      {activeTab === 'resourceFields' ? (
         <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
           <SectionHeader
             icon={<LockKeyhole className="h-5 w-5" />}
-            title="字段安全"
-            action={
-              canManageResources ? (
-                <button
-                  type="button"
-                  onClick={() => setIsDataItemsEditOpen(true)}
-                  className="inline-flex h-10 items-center gap-2 rounded-full border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 text-[0.8125rem] font-medium text-[var(--text-secondary)] transition hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                >
-                  <PencilLine className="h-4 w-4" />
-                  编辑字段
-                </button>
-              ) : null
-            }
+            title="资源字段"
           />
-
-          <ModuleAlignmentStrip
-            title="访问控制管理一致口径"
-            items={accessControlAlignmentItems}
-            withEmbed={withEmbed}
-          />
-          <ModuleAlignmentStrip
-            title="数据同态加密一致口径"
-            items={homomorphicAlignmentItems}
-            withEmbed={withEmbed}
-          />
-
-          {fieldSecurityRows.length > 0 ? (
-            <div className="mt-5 overflow-hidden rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] shadow-[var(--shadow-soft)]">
-              <div className="overflow-x-auto">
-                <table className="min-w-[1080px] w-full text-left text-[0.8125rem] text-[var(--text-secondary)]">
-                  <thead className="bg-[var(--table-header-bg)] text-[0.75rem] font-semibold text-[var(--text-muted)]">
-                    <tr>
-                      <th className="px-4 py-3.5">字段名称</th>
-                      <th className="px-4 py-3.5">字段编码</th>
-                      <th className="px-4 py-3.5">数据类型</th>
-                      <th className="px-4 py-3.5">字段分类分级</th>
-                      <th className="px-4 py-3.5">字段安全策略</th>
-                      <th className="px-4 py-3.5">字段说明</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {fieldSecurityRows.map((field, index) => (
-                      <tr
-                        key={field.id}
-                        className={index % 2 === 0 ? 'bg-[var(--surface-raised)]' : 'bg-[var(--surface-muted)]'}
-                      >
-                        <td className="px-4 py-3.5 font-medium text-[var(--text-main)]">{field.fieldName}</td>
-                        <td className="px-4 py-3.5">{field.englishName}</td>
-                        <td className="px-4 py-3.5">{field.fieldType}</td>
-                        <td className="px-4 py-3.5">{field.informationCategory}</td>
-                        <td className="px-4 py-3.5">{field.securityPolicy}</td>
-                        <td className="px-4 py-3.5">{field.description}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+          <div className="mt-5">
+            <div className="mb-4 rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
+              字段仅保留资源字典基础信息和同态任务使用情况。访问策略控制到数据资源层级，字段输出范围统一由 API 发布配置维护。
             </div>
+            <ResourceFieldsPanel
+              resourceId={item.id}
+              homomorphicFieldCodes={securityRelations.homomorphicFieldCodes}
+            />
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab === 'apiInfo' ? (
+        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
+          <SectionHeader icon={<DatabaseZap className="h-5 w-5" />} title="API 信息" />
+          <div className="mt-5">
+            <ResourceApisPanel
+              resourceId={String(item.id)}
+              resourceCode={item.code}
+              resourceName={item.name}
+              dataSourceId={securityRelations.sources[0]?.id ? String(securityRelations.sources[0].id) : undefined}
+              canManage={canManageResources}
+            />
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab === 'accessPolicies' ? (
+        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
+          <SectionHeader icon={<ShieldCheck className="h-5 w-5" />} title="访问策略" />
+          <div className="mt-5">
+            <ResourceAccessPoliciesPanel resourceId={String(item.id)} resourceCode={item.code} canManage={canManageResources} />
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab === 'homomorphic' ? (
+        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
+          <SectionHeader icon={<LockKeyhole className="h-5 w-5" />} title="同态加密" />
+          <div className="mt-5">
+            <ResourceHomomorphicPanel
+              resourceId={String(item.id)}
+              resourceCode={item.code}
+              canManage={canManageResources}
+            />
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab === 'accessInfo' ? (
+        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
+          <SectionHeader icon={<Network className="h-5 w-5" />} title="安全接入" />
+
+          {isSecurityRelationsLoading ? (
+            <div className="py-10 text-center text-[0.875rem] text-[var(--text-muted)]">正在加载数据源与接入安全信息...</div>
+          ) : securityRelationsError ? (
+            <div className="mt-5 rounded-[12px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-4 text-[0.8125rem] text-[var(--status-danger-text)]">{securityRelationsError}</div>
           ) : (
-            <div className="mt-5 rounded-[14px] border border-dashed border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-8 text-[0.875rem] leading-7 text-[var(--text-secondary)]">
-              当前安全档案尚未维护字段级分类分级信息。
-            </div>
+            <>
+              <div className="mt-5 grid gap-4">
+                {securityRelations.sources.map((source) => {
+                  const security = sourceSecuritySummary(source)
+                  const tags = normalizeArray(source.source_tags).map(String)
+                  return (
+                    <article key={String(source.id)} className="rounded-[16px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] p-4 shadow-[var(--shadow-soft)]">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="text-[0.75rem] text-[var(--text-muted)]">{String(source.source_code || '未配置编码')}</div>
+                          <div className="mt-1 text-[1rem] font-semibold text-[var(--text-main)]">{String(source.source_name || '未命名数据源')}</div>
+                        </div>
+                        <span className="rounded-full bg-[var(--status-success-bg)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--status-success-text)]">{formatSecurityV3Value(source.connection_status)}</span>
+                      </div>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        {[
+                          ['来源类型', sourceTypeLabel(source.source_type)],
+                          ['责任部门', String(source.owner_dept || '未标注')],
+                          ['传输保护', security.transport],
+                          ['完整性校验', security.integrity],
+                          ['访问模式', security.readOnly],
+                          ['连接超时', security.timeout],
+                          ['校验规则', validationRuleSummary(source)],
+                          ['最后检查', formatDateTime(source.last_checked_at)],
+                        ].map(([label, value]) => (
+                          <div key={label} className="rounded-[10px] bg-[var(--surface-muted)] px-3 py-3">
+                            <div className="text-[0.6875rem] text-[var(--text-muted)]">{label}</div>
+                            <div className="mt-1 text-[0.8125rem] font-medium leading-6 text-[var(--text-main)]">{value}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {tags.length ? <div className="mt-4 flex flex-wrap gap-2">{tags.map((tag) => <TopicPill key={tag}>{tag}</TopicPill>)}</div> : null}
+                    </article>
+                  )
+                })}
+                {securityRelations.sources.length === 0 ? (
+                  <div className="rounded-[14px] border border-dashed border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-8 text-center text-[0.875rem] text-[var(--text-secondary)]">当前资源和关联 API 均未绑定数据源。</div>
+                ) : null}
+              </div>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-3">
+                <StatCard title="访问策略" value={`${securityRelations.accessPolicies.length} 条`} hideRail tone="blue" icon={<ShieldCheck className="h-4 w-4" />} />
+                <StatCard title="同态任务" value={`${securityRelations.homomorphicTasks.length} 项`} hideRail tone="green" icon={<LockKeyhole className="h-4 w-4" />} />
+                <StatCard title="最近接入记录" value={`${securityRelations.ingestLogs.length} 条`} hideRail tone="blue" icon={<ScrollText className="h-4 w-4" />} />
+              </div>
+
+              <div className="mt-6 overflow-hidden rounded-[12px] border border-[var(--surface-outline)] bg-[var(--surface-raised)]">
+                <div className="border-b border-[var(--surface-outline)] bg-[var(--table-header-bg)] px-4 py-3 text-[0.875rem] font-semibold text-[var(--text-main)]">最近接入校验</div>
+                {securityRelations.ingestLogs.length ? securityRelations.ingestLogs.slice(0, 5).map((log) => (
+                  <div key={String(log.id)} className="grid gap-2 border-b border-[var(--surface-outline)] px-4 py-3 last:border-b-0 md:grid-cols-[1.1fr_1fr_1fr_0.8fr]">
+                    <div className="text-[0.8125rem] font-medium text-[var(--text-main)]">{String(log.batch_code || '未编号批次')}</div>
+                    <div className="text-[0.8125rem] text-[var(--text-secondary)]">{formatSecurityV3Value(log.execution_type)}</div>
+                    <div className="text-[0.8125rem] text-[var(--text-secondary)]">{formatDateTime(log.started_at)}</div>
+                    <div className="text-[0.8125rem] text-[var(--text-secondary)]">{formatSecurityV3Value(log.result_status)} · 拒绝 {Number(log.rejected_count || 0)}</div>
+                  </div>
+                )) : <div className="px-4 py-8 text-center text-[0.875rem] text-[var(--text-muted)]">尚未产生接入校验记录。</div>}
+              </div>
+            </>
           )}
         </section>
       ) : null}
@@ -788,86 +772,6 @@ export function SecurityGovernanceDetailPage() {
         </section>
       ) : null}
 
-      {activeTab === 'physicalTables' ? (
-        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
-          <SectionHeader icon={<Database className="h-5 w-5" />} title="物理表参考与业务时间字段" />
-
-          {(securityPolicy.legacyPhysicalTableRows.length > 0 || physicalTableState.rows.length > 0) ? (
-            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {(securityPolicy.legacyPhysicalTableRows.length > 0 ? securityPolicy.legacyPhysicalTableRows : physicalTableState.rows).map((row: PhysicalTableRowState | typeof securityPolicy.legacyPhysicalTableRows[number], index) => (
-                <div
-                  key={`${row.tableName}-${index}`}
-                  className="rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-4 shadow-[var(--shadow-soft)]"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[0.75rem] text-[var(--text-muted)]">物理表 {String(index + 1).padStart(2, '0')}</div>
-                      <div className="mt-2 break-all text-[0.9375rem] font-semibold leading-6 text-[var(--text-main)]">{row.tableName}</div>
-                    </div>
-                    {(('isBaseline' in row) && row.isBaseline) || (('baselineFlag' in row) && row.baselineFlag) ? (
-                      <span className="shrink-0 rounded-full bg-[var(--status-info-bg)] px-2.5 py-1 text-[0.6875rem] font-medium text-[var(--status-info-text)]">
-                        基准表
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-4 space-y-2 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">
-                    <div>来源系统：{row.sourceSystem || item.sourceSystem || '未标注'}</div>
-                    <div>业务时间字段：{row.businessTimeField || '未配置'}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="mt-5 rounded-[14px] border border-dashed border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-8 text-[0.875rem] leading-7 text-[var(--text-secondary)]">
-              当前资源尚未维护物理表参考信息，无法形成稳定的业务时间字段与基准表判断。
-            </div>
-          )}
-        </section>
-      ) : null}
-
-      {activeTab === 'latestPreview' ? (
-        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
-          <SectionHeader icon={<RefreshCw className="h-5 w-5" />} title="最新数据预览" />
-
-          <div className="mt-5">
-            <LatestDataPreviewPanel
-              baselineTableName={latestPreviewBaselineTableName}
-              sourceSystems={physicalTableState.sourceSystems}
-              previewData={latestStatRecord?.latestPreviewData ?? null}
-              isLoading={isLatestBatchStatLoading}
-              errorMessage={latestBatchStatError}
-              latestPeriodCode={latestBatchStat.latestPeriodCode}
-            />
-          </div>
-        </section>
-      ) : null}
-
-      {canManageResources ? (
-        <SecurityGovernanceProfileEditDialog
-          open={isEditOpen}
-          record={securityPolicy}
-          onClose={() => setIsEditOpen(false)}
-          onSaved={async () => {
-            await refreshPortalData()
-            await refreshSecurityPolicy()
-            setEditSuccessMessage('安全档案与资源级安全策略已更新。')
-          }}
-        />
-      ) : null}
-
-      {canManageResources ? (
-        <SecurityGovernanceFieldEditDialog
-          open={isDataItemsEditOpen}
-          record={securityPolicy}
-          onClose={() => setIsDataItemsEditOpen(false)}
-          onSaved={async () => {
-            await refreshPortalData()
-            await refreshSecurityPolicy()
-            setEditSuccessMessage('字段安全档案与字段安全策略已更新。')
-          }}
-        />
-      ) : null}
     </div>
   )
 }

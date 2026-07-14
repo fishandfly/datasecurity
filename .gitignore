@@ -2,3 +2,9 @@
 /dist
 /docs
 /docker/storage/
+/docker/backups/
+/docker/.env
+/docker
+*pycache*
+/tmp/
+/scripts/

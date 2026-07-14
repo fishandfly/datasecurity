@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
+  Braces,
   Building2,
   ClipboardList,
   Database,
@@ -77,6 +78,7 @@ const NAVIGATION_STORAGE_KEY = 'JL_ECO_SERVICE_NAVIGATIONS'
 const iconMap: Record<string, LucideIcon> = {
   Activity,
   AlertTriangle,
+  Braces,
   Building2,
   ClipboardList,
   Database,
@@ -95,14 +97,17 @@ const iconMap: Record<string, LucideIcon> = {
 }
 
 const DEFAULT_PRIMARY_NAVIGATIONS: PortalPrimaryNavigationItem[] = [
-  { key: 'nav_security_dashboard', title: '安全态势看板', target: '/security-governance/dashboard', icon: Shield },
-  { key: 'nav_data_access', title: '数据接入管理', target: '/security-governance/data-access/source-config', icon: DatabaseZap },
-  { key: 'nav_resource_control', title: '数据资源管控', target: '/security-governance/resources', icon: Database },
-  { key: 'nav_access_control', title: '访问控制管理', target: '/security-governance/access-control/classification', icon: Workflow },
-  { key: 'nav_homomorphic_encryption', title: '数据同态加密', target: '/security-governance/homomorphic-encryption', icon: LockKeyhole },
+  { key: 'nav_security_dashboard', title: '安全态势', target: '/security-governance/dashboard', icon: Activity },
+  { key: 'nav_security_ingest', title: '接入校验', target: '/security-governance/ingest/sources', icon: DatabaseZap },
+  { key: 'nav_security_resources', title: '数据资源', target: '/security-governance/resources/catalog', icon: Database },
+  { key: 'nav_security_tags', title: '标签管理', target: '/security-governance/tags/catalog', icon: Tags },
+  { key: 'nav_security_access', title: '访问策略', target: '/security-governance/access/policies', icon: Shield },
+  { key: 'nav_security_risks', title: '风险事件', target: '/security-governance/risks/events', icon: AlertTriangle },
+  { key: 'nav_security_homomorphic', title: '同态加密', target: '/security-governance/homomorphic/tasks', icon: LockKeyhole },
 ]
 
 const EXCLUDED_PRIMARY_NAV_TARGETS = new Set([
+  '/security-governance/resources/apis',
   '/security-governance/audit',
   '/security-governance/audit/log-query',
   '/security-governance/log-query',
@@ -225,8 +230,11 @@ function sortNodes<T extends { sort?: number }>(items: T[]): T[] {
 
 function ensureDefaultPrimaryNavigations(items: PortalPrimaryNavigationItem[]): PortalPrimaryNavigationItem[] {
   const itemByTarget = new Map(items.map((item) => [item.target, item]))
-  const defaultItems = DEFAULT_PRIMARY_NAVIGATIONS.map((item) => itemByTarget.get(item.target) || item)
-  const extraItems = items.filter((item) => !EXCLUDED_PRIMARY_NAV_TARGETS.has(item.target) && !DEFAULT_PRIMARY_NAVIGATIONS.some((defaultItem) => defaultItem.target === item.target))
+  const defaultItems = DEFAULT_PRIMARY_NAVIGATIONS.map((item) => {
+    const configuredItem = itemByTarget.get(item.target)
+    return configuredItem ? { ...configuredItem, key: item.key, title: item.title, icon: item.icon } : item
+  })
+  const extraItems = items.filter((item) => !item.target.startsWith('/security-governance') && !EXCLUDED_PRIMARY_NAV_TARGETS.has(item.target) && !DEFAULT_PRIMARY_NAVIGATIONS.some((defaultItem) => defaultItem.target === item.target))
   return [...defaultItems, ...extraItems]
 }
 

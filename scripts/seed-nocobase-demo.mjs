@@ -256,7 +256,7 @@ const dataProducts = [
     domain: '监管执法',
     owner: '综合执法局',
     update_cycle: '每日',
-    api_endpoint: 'nocobase://eco_data_products/enterprise-risk-monitor/sample_rows_json',
+    api_endpoint: 'data-service://products/enterprise-risk-monitor/sample-rows',
     api_method: 'GET',
     api_auth_mode: '平台授权 token',
     api_refresh_interval: '15 分钟',
@@ -291,7 +291,7 @@ const dataProducts = [
     domain: '监测质控',
     owner: '省生态环境监测中心',
     update_cycle: '30 分钟',
-    api_endpoint: 'nocobase://eco_data_products/monitor-quality-check/sample_rows_json',
+    api_endpoint: 'data-service://products/monitor-quality-check/sample-rows',
     api_method: 'GET',
     api_auth_mode: '只读服务密钥',
     api_refresh_interval: '5 分钟',
@@ -325,7 +325,7 @@ const dataProducts = [
     domain: '审批协同',
     owner: '行政审批办公室',
     update_cycle: '每日',
-    api_endpoint: 'nocobase://eco_data_products/approval-collaboration-ledger/sample_rows_json',
+    api_endpoint: 'data-service://products/approval-collaboration-ledger/sample-rows',
     api_method: 'GET',
     api_auth_mode: '按角色授权',
     api_refresh_interval: '30 分钟',
@@ -634,30 +634,25 @@ async function ensureBaseDictionariesAndTrees() {
     enabled: true,
   })
   const openFheConfigIdentity = { moduleKey: 'security-governance', groupKey: 'homomorphic-encryption', key: 'homomorphic_engine_config' }
-  const existingOpenFheConfig = await findOne('jcConfigCenterItems', openFheConfigIdentity)
-  if (!existingOpenFheConfig) {
-    await client.resource('jcConfigCenterItems').create({
-      values: {
-        ...openFheConfigIdentity,
-        title: '同态加密引擎连接',
-        description: '仅启用整数精确型和浮点近似型算法，敏感认证材料使用凭据引用',
-        valueType: 'json',
-        required: true,
-        enabled: true,
-        sort: 10,
-        value: {
-          engineName: '量测数据同态加密引擎',
-          endpoint: '/homomorphic-engine-api',
-          authMode: 'mTLS',
-          secretRef: 'secret://security/homomorphic-engine-client',
-          timeoutSeconds: 60,
-          enabled: false,
-          supportedAlgorithms: ['BFV', 'CKKS'],
-        },
-        schema: { algorithms: ['整数精确型', '浮点近似型'] },
-      },
-    })
-  }
+  await upsert('jcConfigCenterItems', openFheConfigIdentity, {
+    ...openFheConfigIdentity,
+    title: '密态计算运行配置',
+    description: '启用整数精确与浮点近似的求和、平均值能力，敏感认证材料使用凭据引用。',
+    valueType: 'json',
+    required: true,
+    enabled: true,
+    sort: 10,
+    value: {
+      engineName: '量测数据密态计算服务',
+      endpoint: '/homomorphic-engine-api',
+      authMode: 'mTLS',
+      secretRef: 'secret://security/homomorphic-engine-client',
+      timeoutSeconds: 60,
+      enabled: false,
+      supportedAlgorithms: ['整数精确型', '浮点近似型'],
+    },
+    schema: { algorithms: ['整数精确型', '浮点近似型'] },
+  })
 
   return {
     productionRoot,
@@ -1319,39 +1314,7 @@ async function seedBusinessData(ref) {
     })
   }
 
-  const createdLog = (code, algorithm, status) => ({
-    id: `created-${code}`,
-    time: now,
-    stage: 'created',
-    result: 'success',
-    message: status === 'approved' ? `${algorithm === 'BFV' ? '整数精确型' : '浮点近似型'}演示任务已审批` : `已创建${algorithm === 'BFV' ? '整数精确型' : '浮点近似型'}同态加密任务，等待审批`,
-    durationMs: null,
-    engineVersion: '',
-    requestId: '',
-  })
-  const confidentialTasks = [
-    {
-      task_code: 'HE-INT-DEMO-001', task_name: '用户侧累计电量密态汇总', scenario: '在不暴露客户明细的前提下，对脱敏用户侧累计电量执行整数精确聚合。',
-      task_status: 'approved', task_status_id: ref.dictIds['compute_status:approved'], risk_level: 'medium', risk_level_id: ref.dictIds['risk_level:medium'],
-      algorithm: 'bfv', algorithm_id: ref.dictIds['compute_algorithm:bfv'], source_domain: '计量安全域', target_domain: '调控分析域', owner_user_id: 1, progress: 0,
-      workflow_instance_id: 'DEMO-APPROVED-INT', task_tags: ['同态加密', '整数精确型', '已审批'], resource_codes: ['GRID-METER-SEC-001'], field_codes: ['ENERGY_IMPORT'],
-      compute_request: { operation: 'sum', values: [184563, 184672, 184781, 184892] },
-    },
-    {
-      task_code: 'HE-FLOAT-DEMO-001', task_name: '跨专业设备负载率统计', scenario: '对变电主变和配电馈线负载率执行跨专业近似均值统计。',
-      task_status: 'approved', task_status_id: ref.dictIds['compute_status:approved'], risk_level: 'high', risk_level_id: ref.dictIds['risk_level:high'],
-      algorithm: 'ckks', algorithm_id: ref.dictIds['compute_algorithm:ckks'], source_domain: '设备生产域', target_domain: '配网分析域', owner_user_id: 1, progress: 0,
-      workflow_instance_id: 'DEMO-APPROVED-FLOAT', task_tags: ['同态加密', '浮点近似型', '已审批', '高风险任务'], resource_codes: ['GRID-SUBSTATION-SEC-003', 'GRID-DISTRIBUTION-SEC-004'], field_codes: ['LOAD_RATE', 'LOAD_RATE'],
-      compute_request: { operation: 'mean', values: [63.4, 64.1, 64.8, 57.6, 58.4, 59.2] },
-    },
-    {
-      task_code: 'HE-FLOAT-DEMO-002', task_name: '主网频率稳定性密态统计', scenario: '对同步相量频率序列执行密态均值计算，验证跨域可用不可见。',
-      task_status: 'pending_approval', task_status_id: ref.dictIds['compute_status:pending_approval'], risk_level: 'high', risk_level_id: ref.dictIds['risk_level:high'],
-      algorithm: 'ckks', algorithm_id: ref.dictIds['compute_algorithm:ckks'], source_domain: '调控生产域', target_domain: '稳定分析域', owner_user_id: 1, progress: 0,
-      workflow_instance_id: 'DEMO-PENDING-FLOAT', task_tags: ['同态加密', '浮点近似型', '待审批', '高风险任务'], resource_codes: ['GRID-PHASOR-SEC-005'], field_codes: ['FREQUENCY'],
-      compute_request: { operation: 'mean', values: [50.017842, 50.017806, 50.017781] },
-    },
-  ]
+  const confidentialTasks = []
   for (const task of confidentialTasks) {
     const { resource_codes, field_codes, compute_request, ...taskValues } = task
     const algorithm = taskValues.algorithm.toUpperCase()

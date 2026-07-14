@@ -14,8 +14,10 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useLocation } from 'react-router-dom'
 import { Button } from '../components/ui'
+import { SecurityModuleTabs } from '../components/security-module-tabs'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
 import { useSecurityDataSources, type SecurityDataSourceRecord } from '../lib/nocobase-security-runtime'
 import { cn } from '../lib/utils'
@@ -49,12 +51,6 @@ type AccessRuleRecord = {
   conditions: string[]
   actions: string[]
 }
-
-const accessSecondaryNavItems: Array<{ id: string; label: string; path: string; icon: LucideIcon }> = [
-  { id: 'source-config', label: '数据源配置', path: '/security-governance/data-access/source-config', icon: DatabaseZap },
-  { id: 'access-rules', label: '接入规则配置', path: '/security-governance/data-access/rule-config', icon: ShieldCheck },
-  { id: 'access-monitor', label: '接入监控', path: '/security-governance/data-access/monitoring', icon: Network },
-]
 
 const ruleTypes: Array<'全部类型' | RuleType> = ['全部类型', '网关接入']
 const ruleStatuses: Array<'全部' | RuleStatus> = ['全部', '启用中', '待审批', '草稿', '已停用']
@@ -112,30 +108,8 @@ function buildAccessRules(sources: SecurityDataSourceRecord[]): AccessRuleRecord
   }).sort((left, right) => right.priority - left.priority || (right.successRate ?? -1) - (left.successRate ?? -1))
 }
 
-function SourceSecondaryTabs({ withEmbed, actions }: { withEmbed: (path: string) => string; actions?: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-      <nav aria-label="数据接入管理二级导航" className="inline-flex flex-wrap gap-2 rounded-[18px] border border-[rgba(var(--theme-soft-rgb),0.18)] bg-[color-mix(in_srgb,var(--surface-glass)_92%,transparent)] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur">
-        {accessSecondaryNavItems.map((item) => {
-          const active = item.id === 'access-rules'
-          return (
-            <Link
-              key={item.id}
-              to={withEmbed(item.path)}
-              className={cn(
-                'inline-flex min-h-11 items-center gap-3 whitespace-nowrap rounded-[14px] px-4 py-3 text-[0.875rem] font-medium transition',
-                active ? 'bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] !text-white shadow-[0_14px_24px_rgba(var(--theme-strong-rgb),0.20)]' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] hover:text-[var(--primary)]',
-              )}
-            >
-              <item.icon className={cn('h-4 w-4', active ? '!text-white' : '')} />
-              <span className={active ? '!text-white' : ''}>{item.label}</span>
-            </Link>
-          )
-        })}
-      </nav>
-      {actions ? <div className="flex flex-wrap items-center gap-2 xl:justify-end">{actions}</div> : null}
-    </div>
-  )
+function SourceSecondaryTabs({ actions }: { actions?: ReactNode }) {
+  return <SecurityModuleTabs module="ingest" actions={actions} />
 }
 
 function statusTone(status: RuleStatus) {
@@ -170,11 +144,11 @@ function MetricCard({ title, value, detail, icon, tone = 'primary' }: { title: s
 function RuleDrawer({ rule, onClose }: { rule: AccessRuleRecord | null; onClose: () => void }) {
   if (!rule) return null
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <aside className="absolute right-0 top-0 flex h-dvh max-h-dvh w-full max-w-[720px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
-        <div className="flex items-start justify-between border-b border-[var(--line)] px-6 py-4">
+      <aside className="absolute inset-y-0 right-0 flex h-full max-h-[100dvh] w-full max-w-[720px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
+        <div className="flex shrink-0 items-start justify-between border-b border-[var(--line)] px-6 py-4">
           <div>
             <div className="text-[0.75rem] text-[var(--text-muted)]">接入规则详情</div>
             <h2 className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">{rule.name}</h2>
@@ -238,11 +212,12 @@ function RuleDrawer({ rule, onClose }: { rule: AccessRuleRecord | null; onClose:
             ))}
           </section>
         </div>
-        <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--line)] px-6 py-4">
-          <Button variant="secondary" onClick={onClose}>关闭</Button>
+        <div className="sticky bottom-0 z-10 flex shrink-0 justify-end border-t border-[var(--line)] bg-[var(--surface)] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-8px_24px_rgba(8,18,32,0.08)]">
+          <Button variant="secondary" className="w-full sm:w-auto" onClick={onClose}>关闭</Button>
         </div>
       </aside>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -287,9 +262,8 @@ export function SecurityAccessRuleConfigPage() {
     <>
       <div className="space-y-5">
         <SourceSecondaryTabs
-          withEmbed={withEmbed}
           actions={
-            <Link to={withEmbed('/security-governance/data-access/source-config')}>
+            <Link to={withEmbed('/security-governance/ingest/sources')}>
               <Button className="gap-2"><DatabaseZap className="h-4 w-4" />配置数据源规则</Button>
             </Link>
           }
@@ -306,7 +280,13 @@ export function SecurityAccessRuleConfigPage() {
           <div className="grid gap-3 xl:grid-cols-[minmax(260px,1fr)_160px_160px_180px_auto]">
             <label className="flex h-10 min-w-0 items-center gap-2 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] px-3">
               <Search className="h-4 w-4 text-[var(--text-muted)]" />
-              <input value={keyword} onChange={(event) => setKeyword(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[0.875rem] text-[var(--text-main)] outline-none placeholder:text-[var(--text-muted)]" placeholder="搜索规则名称、来源、责任人或说明" />
+              <input
+                aria-label="搜索接入规则"
+                value={keyword}
+                onChange={(event) => setKeyword(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-[0.875rem] text-[var(--text-main)] outline-none placeholder:text-[var(--text-muted)]"
+                placeholder="搜索接入规则名称、数据源名称、规则编码或责任部门"
+              />
             </label>
             <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as '全部类型' | RuleType)} className="h-10 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] px-3 text-[0.875rem] text-[var(--text-secondary)] outline-none">
               {ruleTypes.map((item) => <option key={item}>{item}</option>)}

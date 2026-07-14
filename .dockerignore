@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.DS_Store
+*.log
+docker/storage
+docker/backups
+docker/v3.0/data
+docker/v3.0/logs
+openfhe-service/.venv
+openfhe-service/**/__pycache__
+docs
+

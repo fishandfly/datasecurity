@@ -33,6 +33,8 @@ type ResourceEditDialogProps = {
     serviceTypeOptions: SelectOption[]
     supplyMethodOptions: SelectOption[]
   }
+  securityGovernanceMode?: boolean
+  dataSourceOptions?: Array<{ value: string; label: string }>
   onClose: () => void
   onSaved: () => Promise<void> | void
 }
@@ -139,7 +141,7 @@ function flattenTree(tree: CatalogCategoryTreeNode[]) {
 export function ResourceEditDialog({
   open,
   mode = 'edit',
-  variant = 'modal',
+  variant = 'drawer',
   resourceId,
   initialValues,
   categoryTree,
@@ -147,6 +149,8 @@ export function ResourceEditDialog({
   sourceTree,
   regionTree,
   editOptions,
+  securityGovernanceMode = false,
+  dataSourceOptions = [],
   onClose,
   onSaved,
 }: ResourceEditDialogProps) {
@@ -173,7 +177,7 @@ export function ResourceEditDialog({
     ? 'fixed inset-0 z-50 flex justify-end bg-[var(--dialog-overlay)]'
     : 'fixed inset-0 z-50 flex items-center justify-center bg-[var(--dialog-overlay)] px-4 py-6'
   const panelClass = isDrawer
-    ? 'flex h-full w-full max-w-[860px] flex-col overflow-hidden border-l border-[var(--dialog-surface-border)] bg-[var(--dialog-surface)] shadow-[0_28px_80px_var(--dialog-shadow)]'
+    ? 'flex h-full max-h-[100dvh] w-full max-w-[860px] flex-col overflow-hidden border-l border-[var(--dialog-surface-border)] bg-[var(--dialog-surface)] shadow-[0_28px_80px_var(--dialog-shadow)]'
     : 'max-h-[92vh] w-full max-w-6xl overflow-hidden rounded-[24px] border border-[var(--dialog-surface-border)] bg-[var(--dialog-surface)] shadow-[0_28px_80px_var(--dialog-shadow)]'
   const bodyClass = isDrawer
     ? 'min-h-0 flex-1 overflow-y-auto px-6 py-5'
@@ -182,7 +186,19 @@ export function ResourceEditDialog({
   const updateField = <K extends keyof EditableResourceRecord>(key: K, value: EditableResourceRecord[K]) => {
     setForm((current) => (current ? { ...current, [key]: value } : current))
   }
-  const isSubmitDisabled = isLoading || isSaving || !form || (mode === 'create' && (!form.resourceCode.trim() || !form.resourceName.trim()))
+  const missingSecurityRequiredField = Boolean(securityGovernanceMode && form && (
+    !form.dataSourceId.trim()
+    || !form.dataResourceTypeId.trim()
+    || !form.domainCategoryId.trim()
+    || !form.regionCategoryId.trim()
+    || !form.updateCycleId.trim()
+    || !form.protectionLevel.trim()
+  ))
+  const isSubmitDisabled = isLoading || isSaving || !form || (mode === 'create' && (
+    !form.resourceCode.trim()
+    || !form.resourceName.trim()
+    || missingSecurityRequiredField
+  ))
 
   const handleSave = async () => {
     if (!form) return
@@ -210,17 +226,14 @@ export function ResourceEditDialog({
   const dialog = (
     <div className={overlayClass}>
       <div className={panelClass}>
-        <div className="flex items-center justify-between border-b border-[var(--dialog-divider)] px-6 py-5">
+        <div className={`${isDrawer ? 'shrink-0 ' : ''}flex items-center justify-between border-b border-[var(--dialog-divider)] px-6 py-5`}>
           <div>
             <div className="text-[1.25rem] font-semibold text-[var(--text-main)]">{mode === 'create' ? '新建数据资源' : '编辑资源'}</div>
-            <div className="mt-1 text-[0.8125rem] text-[var(--text-muted)]">
-              {mode === 'create' ? '支持文本框、下拉框和分类树输入，提交后直接创建到后台。' : '支持文本框、下拉框和分类树输入，保存后直接写回后台。'}
-            </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--dialog-input-border)] bg-[var(--dialog-soft-button-bg)] text-[var(--text-secondary)] transition hover:border-[var(--primary)] hover:text-[var(--primary)]"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-[6px] border border-[var(--dialog-input-border)] bg-[var(--dialog-soft-button-bg)] text-[var(--text-secondary)] transition hover:border-[var(--primary)] hover:text-[var(--primary)]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -240,6 +253,74 @@ export function ResourceEditDialog({
                 <div className={DIALOG_ERROR_PANEL_CLASS}>{saveError}</div>
               ) : null}
 
+              {securityGovernanceMode ? (
+                <>
+                  <section className="grid gap-4 lg:grid-cols-2">
+                    {mode === 'create' ? (
+                      <label className="space-y-2">
+                        <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">资源编码 <span className="text-[var(--status-danger-text)]">*</span></div>
+                        <input value={form.resourceCode} onChange={(event) => updateField('resourceCode', event.target.value)} className={DIALOG_INPUT_CLASS} />
+                      </label>
+                    ) : null}
+                    <label className="space-y-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">资源名称 <span className="text-[var(--status-danger-text)]">*</span></div>
+                      <input value={form.resourceName} onChange={(event) => updateField('resourceName', event.target.value)} className={DIALOG_INPUT_CLASS} />
+                    </label>
+                    <label className="space-y-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">关联数据源 <span className="text-[var(--status-danger-text)]">*</span></div>
+                      <select value={form.dataSourceId} onChange={(event) => updateField('dataSourceId', event.target.value)} className={DIALOG_INPUT_CLASS}>
+                        <option value="">请选择已接入数据源</option>
+                        {dataSourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="space-y-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">资源类型 <span className="text-[var(--status-danger-text)]">*</span></div>
+                      <select value={form.dataResourceTypeId} onChange={(event) => updateField('dataResourceTypeId', event.target.value)} className={DIALOG_INPUT_CLASS}>
+                        <option value="">请选择资源类型</option>
+                        {editOptions.serviceTypeOptions
+                          .filter((option) => /数据库|数据表|表/i.test(`${option.label} ${option.value}`))
+                          .map((option) => <option key={option.value} value={option.value}>数据库表</option>)}
+                      </select>
+                    </label>
+                    <label className="space-y-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">更新周期 <span className="text-[var(--status-danger-text)]">*</span></div>
+                      <select value={form.updateCycleId} onChange={(event) => updateField('updateCycleId', event.target.value)} className={DIALOG_INPUT_CLASS}>
+                        <option value="">请选择更新周期</option>
+                        {editOptions.updateCycleOptions.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label.trim() === '分钟' ? '分钟级' : option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="space-y-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">防护层 <span className="text-[var(--status-danger-text)]">*</span></div>
+                      <select value={form.protectionLevel} onChange={(event) => updateField('protectionLevel', event.target.value)} className={DIALOG_INPUT_CLASS}>
+                        <option value="l1">普通共享层</option>
+                        <option value="l2">内部受控层</option>
+                        <option value="l3">跨域密态层</option>
+                      </select>
+                    </label>
+                  </section>
+
+                  <section className="grid gap-4 xl:grid-cols-2">
+                    <TreeSelectField label="数据分类 *" tree={categoryTree} value={form.domainCategoryId} onChange={(nextValue) => updateField('domainCategoryId', nextValue)} />
+                    <TreeSelectField
+                      label="区域范围 *"
+                      tree={regionTree}
+                      value={form.regionCategoryId}
+                      onChange={(nextValue, label) => {
+                        updateField('regionCategoryId', nextValue)
+                        updateField('regionCoverage', label)
+                      }}
+                    />
+                  </section>
+
+                  <label className="block space-y-2">
+                    <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">摘要</div>
+                    <textarea value={form.summary} onChange={(event) => updateField('summary', event.target.value)} rows={4} className={DIALOG_TEXTAREA_CLASS} />
+                  </label>
+                </>
+              ) : (
+                <>
               <section className="grid gap-4 lg:grid-cols-2">
                 {mode === 'create' ? (
                   <label className="space-y-2">
@@ -397,15 +478,17 @@ export function ResourceEditDialog({
                   }}
                 />
               </section>
+                </>
+              )}
             </div>
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-[var(--dialog-divider)] px-6 py-4">
+        <div className={`${isDrawer ? 'sticky bottom-0 z-10 grid shrink-0 grid-cols-2 bg-[var(--dialog-surface)] pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-8px_24px_rgba(8,18,32,0.08)] sm:flex ' : 'flex py-4 '}items-center justify-end gap-3 border-t border-[var(--dialog-divider)] px-6`}>
           <button
             type="button"
             onClick={onClose}
-            className={DIALOG_SECONDARY_BUTTON_CLASS}
+            className={`${DIALOG_SECONDARY_BUTTON_CLASS} w-full sm:w-auto`}
           >
             取消
           </button>
@@ -415,7 +498,7 @@ export function ResourceEditDialog({
                   void handleSave()
                 }}
                 disabled={isSubmitDisabled}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] px-5 text-[0.8125rem] font-semibold text-white shadow-[0_12px_24px_rgba(var(--theme-strong-rgb),0.2)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] px-5 text-[0.8125rem] font-semibold text-white shadow-[0_12px_24px_rgba(var(--theme-strong-rgb),0.2)] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
                 <Save className="h-4 w-4" />
                 {isSaving ? (mode === 'create' ? '创建中...' : '保存中...') : mode === 'create' ? '创建' : '保存'}

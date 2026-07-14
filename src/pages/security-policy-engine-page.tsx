@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { AccessControlSecondaryTabs } from '../components/security-access-control-tabs'
 import { Button } from '../components/ui'
 import { useSecurityGovernancePolicies, type SecurityGovernancePolicyRecord } from '../lib/nocobase-security-governance'
@@ -346,11 +347,11 @@ function PolicyDrawer({
 }) {
   if (!policy) return null
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <aside className="absolute right-0 top-0 flex h-dvh max-h-dvh w-full max-w-[760px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
-        <div className="flex items-start justify-between border-b border-[var(--line)] px-6 py-4">
+      <aside className="absolute inset-y-0 right-0 flex h-full max-h-[100dvh] w-full max-w-[760px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
+        <div className="flex shrink-0 items-start justify-between border-b border-[var(--line)] px-6 py-4">
           <div>
             <div className="text-[0.75rem] text-[var(--text-muted)]">{mode === 'create' ? '新建策略' : '编辑策略'}</div>
             <h2 className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">{policy.name}</h2>
@@ -435,14 +436,15 @@ function PolicyDrawer({
           </section>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[var(--line)] px-6 py-4">
-          <Button variant="secondary" onClick={onClose}>取消</Button>
-          <Button variant="secondary">保存为草稿</Button>
-          <Button variant="secondary">发布校验</Button>
-          <Button>保存并启用</Button>
+        <div className="sticky bottom-0 z-10 grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--line)] bg-[var(--surface)] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-8px_24px_rgba(8,18,32,0.08)] sm:flex sm:items-center sm:justify-end">
+          <Button variant="secondary" className="w-full sm:w-auto" onClick={onClose}>取消</Button>
+          <Button variant="secondary" className="w-full sm:w-auto">保存为草稿</Button>
+          <Button variant="secondary" className="w-full sm:w-auto">发布校验</Button>
+          <Button className="w-full sm:w-auto">保存并启用</Button>
         </div>
       </aside>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

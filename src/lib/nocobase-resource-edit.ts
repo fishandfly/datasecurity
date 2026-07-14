@@ -6,6 +6,9 @@ type RawEditableResource = {
   id?: number | string
   resource_code?: string | null
   resource_name?: string | null
+  data_source_id?: number | string | null
+  protection_level?: string | null
+  resource_status?: string | null
   summary?: string | null
   contact_info?: string | null
   domain_category_id?: number | string | null
@@ -29,6 +32,9 @@ export type EditableResourceRecord = {
   id: string
   resourceCode: string
   resourceName: string
+  dataSourceId: string
+  protectionLevel: string
+  resourceStatus: string
   summary: string
   contactInfo: string
   domainCategoryId: string
@@ -62,6 +68,9 @@ const EMPTY_EDITABLE_RESOURCE: EditableResourceRecord = {
   id: '',
   resourceCode: '',
   resourceName: '',
+  dataSourceId: '',
+  protectionLevel: 'l2',
+  resourceStatus: 'enabled',
   summary: '',
   contactInfo: '',
   domainCategoryId: '',
@@ -234,6 +243,9 @@ function mapEditableResource(raw: RawEditableResource): EditableResourceRecord {
     id: normalizeId(raw.id),
     resourceCode: normalizeText(raw.resource_code),
     resourceName: normalizeText(raw.resource_name),
+    dataSourceId: normalizeId(raw.data_source_id),
+    protectionLevel: normalizeText(raw.protection_level) || 'l2',
+    resourceStatus: normalizeText(raw.resource_status) || 'enabled',
     summary: normalizeText(raw.summary),
     contactInfo: normalizeText(raw.contact_info),
     domainCategoryId: normalizeId(raw.domain_category_id),
@@ -265,6 +277,9 @@ function buildEditableResourceValues(values: EditableResourceRecord) {
   return {
     resource_code: values.resourceCode.trim(),
     resource_name: values.resourceName.trim(),
+    data_source_id: toNullableId(values.dataSourceId),
+    protection_level: values.protectionLevel.trim() || 'l2',
+    resource_status: values.resourceStatus.trim() || 'enabled',
     summary: values.summary.trim(),
     contact_info: values.contactInfo.trim(),
     domain_category_id: toNullableId(values.domainCategoryId),

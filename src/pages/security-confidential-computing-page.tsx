@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Button } from '../components/ui'
 import { HomomorphicSecondaryTabs } from '../components/security-homomorphic-tabs'
 import {
@@ -74,11 +75,11 @@ function MetricCard({ title, value, detail, icon }: { title: string; value: stri
 
 function TaskDrawer({ task, onClose, onExecute, executing }: { task: ConfidentialTaskRecord | null; onClose: () => void; onExecute: (task: ConfidentialTaskRecord) => void; executing: boolean }) {
   if (!task) return null
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <aside className="absolute right-0 top-0 flex h-dvh max-h-dvh w-full max-w-[680px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
-        <div className="flex items-start justify-between border-b border-[var(--line)] px-6 py-4">
+      <aside className="absolute inset-y-0 right-0 flex h-full max-h-[100dvh] w-full max-w-[680px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
+        <div className="flex shrink-0 items-start justify-between border-b border-[var(--line)] px-6 py-4">
           <div><div className="text-[0.75rem] text-[var(--text-muted)]">同态加密任务</div><h2 className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">{task.name}</h2><div className="mt-2 flex gap-2"><span className={cn('rounded-full border px-2.5 py-1 text-[0.75rem]', statusTone(task.status))}>{task.statusLabel}</span><span className={cn('rounded-full border px-2.5 py-1 text-[0.75rem]', riskTone(task.risk))}>{task.riskLabel}风险</span></div></div>
           <button type="button" aria-label="关闭" className="rounded-[8px] p-2 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" onClick={onClose}><X className="h-5 w-5" /></button>
         </div>
@@ -113,9 +114,10 @@ function TaskDrawer({ task, onClose, onExecute, executing }: { task: Confidentia
             </div>
           </section>
         </div>
-        <div className="flex justify-end gap-2 border-t border-[var(--line)] px-6 py-4"><Button variant="secondary" onClick={onClose}>关闭</Button><Button className="gap-2" disabled={executing || task.status === 'pending_approval' || task.status === 'running' || task.status === 'completed'} onClick={() => onExecute(task)}><PlayCircle className="h-4 w-4" />{executing ? '正在执行...' : task.status === 'pending_approval' ? '等待审批' : '执行任务'}</Button></div>
+        <div className="sticky bottom-0 z-10 grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--line)] bg-[var(--surface)] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-8px_24px_rgba(8,18,32,0.08)] sm:flex sm:justify-end"><Button variant="secondary" className="w-full sm:w-auto" onClick={onClose}>关闭</Button><Button className="w-full gap-2 sm:w-auto" disabled={executing || task.status === 'pending_approval' || task.status === 'running' || task.status === 'completed'} onClick={() => onExecute(task)}><PlayCircle className="h-4 w-4" />{executing ? '正在执行...' : task.status === 'pending_approval' ? '等待审批' : '执行任务'}</Button></div>
       </aside>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -150,9 +152,9 @@ function TaskCreateDrawer({ open, resources, onClose, onSaved }: { open: boolean
       setIsSaving(false)
     }
   }
-  return (
-    <div className="fixed inset-0 z-50"><div className="absolute inset-0 bg-black/30" onClick={onClose} /><aside className="absolute right-0 top-0 flex h-dvh max-h-dvh w-full max-w-[620px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
-      <div className="flex items-start justify-between border-b border-[var(--line)] px-6 py-4"><div><div className="text-[0.75rem] text-[var(--text-muted)]">新建同态加密任务</div><h2 className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">同态加密任务定义</h2></div><button type="button" aria-label="关闭" className="rounded-[8px] p-2" onClick={onClose}><X className="h-5 w-5" /></button></div>
+  return createPortal(
+    <div className="fixed inset-0 z-50"><div className="absolute inset-0 bg-black/30" onClick={onClose} /><aside className="absolute inset-y-0 right-0 flex h-full max-h-[100dvh] w-full max-w-[620px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
+      <div className="flex shrink-0 items-start justify-between border-b border-[var(--line)] px-6 py-4"><div><div className="text-[0.75rem] text-[var(--text-muted)]">新建同态加密任务</div><h2 className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">同态加密任务定义</h2></div><button type="button" aria-label="关闭" className="rounded-[8px] p-2" onClick={onClose}><X className="h-5 w-5" /></button></div>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
         <section className="space-y-3"><h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">基本信息</h3><label className="block space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>任务名称</span><input className={inputClassName} value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></label><label className="block space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>业务场景</span><textarea className="min-h-20 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 text-[0.875rem] outline-none" value={form.scenario} onChange={(event) => setForm((current) => ({ ...current, scenario: event.target.value }))} /></label></section>
         <section className="space-y-3"><h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">算法类型</h3><div className="grid gap-3 sm:grid-cols-2">{(['BFV', 'CKKS'] as OpenFheAlgorithm[]).map((algorithm) => <button key={algorithm} type="button" className={cn('rounded-[8px] border p-4 text-left', form.algorithm === algorithm ? 'border-[var(--primary)] bg-[var(--status-info-bg)]' : 'border-[var(--line)] bg-[var(--surface-raised)]')} onClick={() => setForm((current) => ({ ...current, algorithm }))}><div className="font-semibold text-[var(--text-main)]">{formatOpenFheAlgorithm(algorithm)}</div><div className="mt-1 text-[0.75rem] leading-5 text-[var(--text-secondary)]">{algorithm === 'BFV' ? '整数精确计算' : '浮点近似计算'}</div></button>)}</div></section>
@@ -160,8 +162,9 @@ function TaskCreateDrawer({ open, resources, onClose, onSaved }: { open: boolean
         <section className="space-y-3"><h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">资源与安全域</h3><label className="block space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>量测数据资源</span><select multiple className="min-h-32 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 text-[0.875rem]" value={form.resourceIds} onChange={(event) => setForm((current) => ({ ...current, resourceIds: Array.from(event.target.selectedOptions, (option) => option.value) }))}>{resources.map((resource) => <option key={resource.id} value={resource.id}>{resource.name} · {resource.department}</option>)}</select></label><div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>源安全域</span><input className={inputClassName} value={form.sourceDomain} onChange={(event) => setForm((current) => ({ ...current, sourceDomain: event.target.value }))} /></label><label className="space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>目标安全域</span><input className={inputClassName} value={form.targetDomain} onChange={(event) => setForm((current) => ({ ...current, targetDomain: event.target.value }))} /></label></div></section>
         {error ? <div className="rounded-[8px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-3 text-[0.8125rem] text-[var(--status-danger-text)]">{error}</div> : null}
       </div>
-      <div className="flex justify-end gap-2 border-t border-[var(--line)] px-6 py-4"><Button variant="secondary" onClick={onClose}>取消</Button><Button disabled={isSaving} onClick={() => void submit()}>{isSaving ? '正在创建...' : '创建待审批任务'}</Button></div>
-    </aside></div>
+      <div className="sticky bottom-0 z-10 grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--line)] bg-[var(--surface)] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-8px_24px_rgba(8,18,32,0.08)] sm:flex sm:justify-end"><Button variant="secondary" className="w-full sm:w-auto" onClick={onClose}>取消</Button><Button className="w-full sm:w-auto" disabled={isSaving} onClick={() => void submit()}>{isSaving ? '正在创建...' : '创建待审批任务'}</Button></div>
+    </aside></div>,
+    document.body,
   )
 }
 
@@ -189,17 +192,18 @@ function EngineConnectionDrawer({ open, config, onClose, onSaved }: { open: bool
     try { const saved = await saveOpenFheEngineConfig(form); await onSaved(saved); setNotice('配置已写入后台配置中心。') } catch (caught) { setFailed(true); setNotice(toErrorMessage(caught, '配置保存失败')) } finally { setIsSaving(false) }
   }
 
-  return (
-    <div className="fixed inset-0 z-50"><div className="absolute inset-0 bg-black/30" onClick={onClose} /><aside className="absolute right-0 top-0 flex h-dvh max-h-dvh w-full max-w-[620px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
-      <div className="flex items-start justify-between border-b border-[var(--line)] px-6 py-4"><div><div className="text-[0.75rem] text-[var(--text-muted)]">加密引擎配置</div><h2 className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">同态加密引擎连接信息</h2><p className="mt-2 text-[0.8125rem] text-[var(--text-secondary)]">本项目仅启用整数精确型和浮点近似型两类算法。</p></div><button type="button" aria-label="关闭" className="rounded-[8px] p-2" onClick={onClose}><X className="h-5 w-5" /></button></div>
+  return createPortal(
+    <div className="fixed inset-0 z-50"><div className="absolute inset-0 bg-black/30" onClick={onClose} /><aside className="absolute inset-y-0 right-0 flex h-full max-h-[100dvh] w-full max-w-[620px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]">
+      <div className="flex shrink-0 items-start justify-between border-b border-[var(--line)] px-6 py-4"><div><div className="text-[0.75rem] text-[var(--text-muted)]">加密引擎配置</div><h2 className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">同态加密引擎连接信息</h2><p className="mt-2 text-[0.8125rem] text-[var(--text-secondary)]">本项目仅启用整数精确型和浮点近似型两类算法。</p></div><button type="button" aria-label="关闭" className="rounded-[8px] p-2" onClick={onClose}><X className="h-5 w-5" /></button></div>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
         <section className="space-y-3"><h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">基础连接</h3><label className="block space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>引擎名称</span><input className={inputClassName} value={form.engineName} onChange={(event) => setForm((current) => ({ ...current, engineName: event.target.value }))} /></label><label className="block space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>服务地址</span><input className={inputClassName} value={form.endpoint} onChange={(event) => setForm((current) => ({ ...current, endpoint: event.target.value }))} placeholder="/homomorphic-engine-api" /></label><div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>认证方式</span><select className={inputClassName} value={form.authMode} onChange={(event) => setForm((current) => ({ ...current, authMode: event.target.value as OpenFheEngineConfig['authMode'] }))}><option value="mTLS">双向证书</option><option value="token">令牌</option><option value="none">无认证</option></select></label><label className="space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>超时时间（秒）</span><input type="number" min="1" className={inputClassName} value={form.timeoutSeconds} onChange={(event) => setForm((current) => ({ ...current, timeoutSeconds: Number(event.target.value) }))} /></label></div><label className="block space-y-1 text-[0.8125rem] text-[var(--text-secondary)]"><span>凭据引用</span><input className={inputClassName} value={form.secretRef} onChange={(event) => setForm((current) => ({ ...current, secretRef: event.target.value }))} /></label></section>
         <section className="space-y-3"><h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">算法能力</h3><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-[8px] border border-[var(--status-success-border)] bg-[var(--status-success-bg)] p-4"><div className="font-semibold text-[var(--status-success-text)]">整数精确型</div><div className="mt-1 text-[0.75rem] text-[var(--text-secondary)]">整数精确同态计算</div></div><div className="rounded-[8px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] p-4"><div className="font-semibold text-[var(--status-info-text)]">浮点近似型</div><div className="mt-1 text-[0.75rem] text-[var(--text-secondary)]">浮点近似同态计算</div></div></div></section>
         <label className="flex items-center justify-between rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-4 py-3 text-[0.875rem] text-[var(--text-secondary)]"><span>启用该同态加密引擎</span><input type="checkbox" checked={form.enabled} onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))} /></label>
         {notice ? <div className={cn('rounded-[8px] border px-4 py-3 text-[0.8125rem]', failed ? 'border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] text-[var(--status-danger-text)]' : 'border-[var(--status-success-border)] bg-[var(--status-success-bg)] text-[var(--status-success-text)]')}>{notice}</div> : null}
       </div>
-      <div className="flex justify-end gap-2 border-t border-[var(--line)] px-6 py-4"><Button variant="secondary" onClick={onClose}>取消</Button><Button variant="secondary" className="gap-2" disabled={isTesting} onClick={() => void test()}><RefreshCw className="h-4 w-4" />{isTesting ? '检查中...' : '测试连接'}</Button><Button disabled={isSaving} onClick={() => void save()}>{isSaving ? '保存中...' : '保存配置'}</Button></div>
-    </aside></div>
+      <div className="sticky bottom-0 z-10 grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--line)] bg-[var(--surface)] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-8px_24px_rgba(8,18,32,0.08)] sm:flex sm:justify-end"><Button variant="secondary" className="w-full sm:w-auto" onClick={onClose}>取消</Button><Button variant="secondary" className="w-full gap-2 sm:w-auto" disabled={isTesting} onClick={() => void test()}><RefreshCw className="h-4 w-4" />{isTesting ? '检查中...' : '测试连接'}</Button><Button className="col-span-2 w-full sm:w-auto" disabled={isSaving} onClick={() => void save()}>{isSaving ? '保存中...' : '保存配置'}</Button></div>
+    </aside></div>,
+    document.body,
   )
 }
 
