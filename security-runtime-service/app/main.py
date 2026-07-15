@@ -18,6 +18,11 @@ from .runtime import (
     execute_data_api,
     publish_api,
     publish_policy,
+    ensure_behavior_baseline_unique_index,
+    upsert_behavior_baseline,
+    ensure_resource_api,
+    preview_resource_latest_rows,
+    unpublish_api,
     record_allowed,
     record_denied,
     runtime_summary,
@@ -32,6 +37,15 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
 )
+
+
+@app.on_event("startup")
+def ensure_runtime_constraints() -> None:
+    try:
+        ensure_behavior_baseline_unique_index()
+    except Exception:
+        # 首次安装时管理表可能尚未创建，保存基线时会再次执行并返回明确错误。
+        pass
 
 
 def _error(status: int, code: str, message: str, request_id: str | None = None) -> JSONResponse:
@@ -195,7 +209,7 @@ async def test_data_source(source_id: int, request: Request):
     counts = fetch_one(
         """
         SELECT count(*) AS resource_count, coalesce(sum(field_count), 0) AS field_count
-        FROM eco_data_resources WHERE data_source_id=%(id)s AND resource_status='enabled'
+        FROM eco_data_resources WHERE data_source_id=%(id)s
         """,
         {"id": source_id},
     ) or {"resource_count": 0, "field_count": 0}
@@ -286,6 +300,45 @@ async def publish_api_endpoint(api_id: int, request: Request):
         return _error(422, "VALIDATION_ERROR", str(error))
 
 
+@app.post("/management/resources/{resource_id}/default-api")
+async def ensure_resource_api_endpoint(resource_id: int, request: Request):
+    auth_error = await _require_management_session(request)
+    if auth_error:
+        return auth_error
+    try:
+        return {"data": ensure_resource_api(resource_id)}
+    except LookupError as error:
+        return _error(404, "NOT_FOUND", str(error))
+    except ValueError as error:
+        return _error(422, "VALIDATION_ERROR", str(error))
+
+
+@app.get("/management/resources/{resource_id}/latest-rows")
+async def preview_resource_latest_rows_endpoint(resource_id: int, request: Request):
+    auth_error = await _require_management_session(request)
+    if auth_error:
+        return auth_error
+    try:
+        return {"data": preview_resource_latest_rows(resource_id, 10)}
+    except LookupError as error:
+        return _error(404, "NOT_FOUND", str(error))
+    except ValueError as error:
+        return _error(422, "VALIDATION_ERROR", str(error))
+    except RuntimeDenied as error:
+        return _error(error.status, error.code, error.message, error.request_id)
+
+
+@app.post("/management/apis/{api_id}/unpublish")
+async def unpublish_api_endpoint(api_id: int, request: Request):
+    auth_error = await _require_management_session(request)
+    if auth_error:
+        return auth_error
+    try:
+        return {"data": unpublish_api(api_id)}
+    except LookupError as error:
+        return _error(404, "NOT_FOUND", str(error))
+
+
 @app.post("/management/policies/{policy_id}/publish")
 async def publish_policy_endpoint(policy_id: int, request: Request):
     auth_error = await _require_management_session(request)
@@ -296,4 +349,20 @@ async def publish_policy_endpoint(policy_id: int, request: Request):
     except LookupError as error:
         return _error(404, "NOT_FOUND", str(error))
     except ValueError as error:
+        return _error(422, "VALIDATION_ERROR", str(error))
+
+
+@app.put("/management/apis/{api_id}/subjects/{subject_id}/behavior-baseline")
+async def save_behavior_baseline_endpoint(api_id: int, subject_id: int, request: Request):
+    auth_error = await _require_management_session(request)
+    if auth_error:
+        return auth_error
+    try:
+        values = await request.json()
+        if not isinstance(values, dict):
+            raise ValueError("行为基线参数不正确")
+        return {"data": upsert_behavior_baseline(subject_id, api_id, values)}
+    except LookupError as error:
+        return _error(404, "NOT_FOUND", str(error))
+    except (ValueError, TypeError) as error:
         return _error(422, "VALIDATION_ERROR", str(error))

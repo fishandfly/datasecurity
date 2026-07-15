@@ -9,7 +9,6 @@ import {
   Gauge,
   KeyRound,
   ScrollText,
-  ShieldCheck,
   Tags,
   UploadCloud,
   Users,
@@ -47,9 +46,8 @@ const moduleTabs: Record<SecurityModuleId, SecurityModuleTab[]> = {
   ],
   access: [
     { label: '访问主体', path: '/security-governance/access/subjects', icon: Users },
-    { label: '访问策略', path: '/security-governance/access/policies', icon: ShieldCheck },
-    { label: '行为基线', path: '/security-governance/access/baselines', icon: Gauge },
     { label: '策略发布', path: '/security-governance/access/publish', icon: UploadCloud },
+    { label: '行为基线', path: '/security-governance/access/baselines', icon: Gauge },
     { label: '调用与决策日志', path: '/security-governance/access/audit', icon: ScrollText },
   ],
   risks: [

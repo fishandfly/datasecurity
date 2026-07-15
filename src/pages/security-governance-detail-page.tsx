@@ -1,25 +1,31 @@
-import { ArrowLeft, Database, DatabaseZap, FileSearch, FolderTree, LockKeyhole, Network, ScrollText, ShieldCheck } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { ArrowLeft, Database, DatabaseZap, FileSearch, FolderTree, LockKeyhole, Network, Pencil, ScrollText, ShieldCheck, Users } from 'lucide-react'
+import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { LineageRelationGraph } from '../components/lineage-relation-graph'
+import { ResourceEditDialog } from '../components/resource-edit-dialog'
 import { ResourceFieldsPanel } from '../components/resource-fields-panel'
 import { ResourceApisPanel } from '../components/resource-apis-panel'
+import { ResourceAccessSubjectsPanel } from '../components/resource-access-subjects-panel'
 import { ResourceAccessPoliciesPanel } from '../components/resource-access-policies-panel'
 import { ResourceHomomorphicPanel } from '../components/resource-homomorphic-panel'
+import { ResourceIngestSamplesPanel } from '../components/resource-physical-table-panel'
 import { ScenicPanel, StatCard, TopicPill } from '../components/ui'
 import { canManageCatalogResources } from '../lib/admin-role'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
 import { connectStatusMeta, formatMB, formatNumber, useLatestResourceBatchStat } from '../lib/nocobase-stat-data'
 import type { CatalogItem } from '../lib/nocobase-portal-data'
+import { useSecurityDataSources } from '../lib/nocobase-security-runtime'
 import { usePortalContext } from '../lib/portal-context'
-import { useResourceSecurityRelations } from '../lib/resource-security-relations'
-import { formatSecurityV3Value } from '../lib/nocobase-security-v3'
+import { useResourceFieldCount, useResourceSecurityRelations } from '../lib/resource-security-relations'
+import { useResourceIngestSamples } from '../lib/resource-ingest-samples'
+import { formatSecurityV3Value, type SecurityV3Record } from '../lib/nocobase-security-v3'
+import { ensureDefaultSecurityApi } from '../lib/security-runtime-client'
 
 type SecurityGovernanceDetailLocationState = {
   returnTo?: string
 }
 
-type SecurityGovernanceDetailTabKey = 'overview' | 'resourceFields' | 'apiInfo' | 'accessPolicies' | 'homomorphic' | 'accessInfo' | 'status' | 'lineage'
+type SecurityGovernanceDetailTabKey = 'overview' | 'resourceFields' | 'physicalTable' | 'apiInfo' | 'accessSubjects' | 'accessPolicies' | 'homomorphic' | 'accessInfo' | 'status' | 'lineage'
 
 function splitPhysicalTableNames(value: string) {
   return value
@@ -288,12 +294,29 @@ export function SecurityGovernanceDetailPage() {
   const { id } = useParams()
   const [searchParams] = useSearchParams()
   const {
-    data,
+    data: {
+      catalogItems,
+      categoryTree,
+      informationCategoryTree,
+      sourceTree,
+      regionTree,
+      editOptions,
+    },
     isLoading: isPortalLoading,
     error: portalError,
     session,
+    refresh,
   } = usePortalContext()
-  const { catalogItems } = data
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [editNotice, setEditNotice] = useState('')
+  const canManageResources = canManageCatalogResources(session?.user.roles)
+  const { data: securityDataSources } = useSecurityDataSources(canManageResources)
+  const dataSourceOptions = useMemo(
+    () => securityDataSources
+      .filter((source) => source.status === 'connected')
+      .map((source) => ({ value: source.id, label: `${source.name} (${source.code})` })),
+    [securityDataSources],
+  )
   const isEmbedMode = readEmbedMode(location.search)
   const withEmbed = (path: string) => appendEmbedToPath(path, isEmbedMode)
   const locationState = (location.state ?? null) as SecurityGovernanceDetailLocationState | null
@@ -323,6 +346,23 @@ export function SecurityGovernanceDetailPage() {
     isLoading: isSecurityRelationsLoading,
     error: securityRelationsError,
   } = useResourceSecurityRelations(item?.id, statEnabled)
+  const {
+    count: resourceFieldCount,
+    isLoading: isResourceFieldCountLoading,
+    refresh: refreshResourceFieldCount,
+  } = useResourceFieldCount(item?.id, statEnabled)
+  const {
+    data: ingestSamples,
+    isLoading: isIngestSamplesLoading,
+    error: ingestSamplesError,
+    refresh: refreshIngestSamples,
+  } = useResourceIngestSamples(item?.id, statEnabled)
+  const handleResourceFieldsChange = useCallback((records: SecurityV3Record[]) => {
+    void refreshResourceFieldCount()
+    if (canManageCatalogResources(session?.user.roles) && records.length > 0 && item?.id) {
+      void ensureDefaultSecurityApi(item.id).catch(() => undefined)
+    }
+  }, [item?.id, refreshResourceFieldCount, session?.user.roles])
   const isLoading = isPortalLoading
   const error = portalError
 
@@ -360,26 +400,29 @@ export function SecurityGovernanceDetailPage() {
     latestStatRecord?.metainfo.business_time_status ?? '',
     Boolean(baselineBusinessTimeField),
   )
-  const canManageResources = canManageCatalogResources(session?.user.roles)
   const detailTabs: Array<[SecurityGovernanceDetailTabKey, string]> = [
     ['overview', '基本信息'],
     ['resourceFields', '资源字段'],
+    ['physicalTable', '接入规则'],
     ['apiInfo', 'API 信息'],
+    ['accessSubjects', '访问主体'],
     ['accessPolicies', '访问策略'],
     ['homomorphic', '同态加密'],
-    ['accessInfo', '安全接入'],
     ['lineage', '血缘关系'],
     ['status', '安全状态'],
   ]
-  const activeTab = detailTabs.some(([key]) => key === requestedTab)
-    ? (requestedTab as SecurityGovernanceDetailTabKey)
+  const normalizedRequestedTab = requestedTab === 'accessInfo' ? 'physicalTable' : requestedTab
+  const activeTab = detailTabs.some(([key]) => key === normalizedRequestedTab)
+    ? (normalizedRequestedTab as SecurityGovernanceDetailTabKey)
     : 'overview'
 
   const overviewMetrics = [
     {
       key: 'fields',
       title: '字段数量',
-      value: `${formatNumber(latestStatRecord?.metainfo.field_count ?? item.fieldCount ?? 0)} 个`,
+      value: isResourceFieldCountLoading
+        ? '读取中...'
+        : `${formatNumber(resourceFieldCount)} 个`,
       tone: 'blue' as const,
       icon: <Database className="h-4 w-4" />,
     },
@@ -400,14 +443,20 @@ export function SecurityGovernanceDetailPage() {
     {
       key: 'ingestSamples',
       title: '接入抽样数量',
-      value: latestStatRecord ? `${formatNumber(latestStatRecord.metainfo.record_count ?? 0)} 条` : '未统计',
+      value: isIngestSamplesLoading
+        ? '读取中...'
+        : ingestSamples
+          ? `${formatNumber(ingestSamples.sampleCount)} 条`
+          : ingestSamplesError
+            ? '读取失败'
+            : '0 条',
       tone: 'green' as const,
       icon: <Network className="h-4 w-4" />,
     },
   ]
 
   const infoRows = [
-    ['资源编码', item.code || '未标注', '资源状态', formatSecurityV3Value(item.resourceStatus)],
+    ['资源编码', item.code || '未标注', '数据类型', item.serviceType || '未标注'],
     ['数据分类', item.businessCategoryPath || item.category || '未标注', '业务分类', item.businessAttributePath || item.businessAttribute || '未标注'],
     ['来源单位', item.department || '未标注', '来源系统', item.sourceSystem || physicalTableState.sourceSystems.join('、') || '未标注'],
     ['更新周期', item.updateCycle || '未标注', '数据格式', item.format.join('、') || '未标注'],
@@ -520,14 +569,29 @@ export function SecurityGovernanceDetailPage() {
 
             </div>
 
-            <button
-              type="button"
-              onClick={handleGoBack}
-              className="inline-flex h-11 shrink-0 items-center gap-2 rounded-full border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 text-[0.8125rem] font-medium text-[var(--text-secondary)] shadow-[0_10px_24px_rgba(51,98,146,0.08)] transition hover:border-[var(--primary)] hover:bg-[var(--surface-raised-strong)] hover:text-[var(--primary)]"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              返回数据资源
-            </button>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {canManageResources ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditNotice('')
+                    setIsEditDialogOpen(true)
+                  }}
+                  className="inline-flex h-11 items-center gap-2 rounded-full border border-[rgba(var(--theme-soft-rgb),0.28)] bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] px-4 text-[0.8125rem] font-semibold text-white shadow-[0_10px_24px_rgba(var(--theme-strong-rgb),0.2)] transition hover:-translate-y-[1px] hover:brightness-105"
+                >
+                  <Pencil className="h-4 w-4" />
+                  编辑数据资源
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={handleGoBack}
+                className="inline-flex h-11 items-center gap-2 rounded-full border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 text-[0.8125rem] font-medium text-[var(--text-secondary)] shadow-[0_10px_24px_rgba(51,98,146,0.08)] transition hover:border-[var(--primary)] hover:bg-[var(--surface-raised-strong)] hover:text-[var(--primary)]"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                返回数据资源
+              </button>
+            </div>
           </div>
 
           <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -544,6 +608,12 @@ export function SecurityGovernanceDetailPage() {
           </div>
         </div>
       </ScenicPanel>
+
+      {editNotice ? (
+        <div className="rounded-[10px] border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-4 py-3 text-[0.875rem] text-[var(--status-success-text)]">
+          {editNotice}
+        </div>
+      ) : null}
 
       {tabsNav}
 
@@ -610,8 +680,87 @@ export function SecurityGovernanceDetailPage() {
             <ResourceFieldsPanel
               resourceId={item.id}
               homomorphicFieldCodes={securityRelations.homomorphicFieldCodes}
+              onFieldsChange={handleResourceFieldsChange}
             />
           </div>
+        </section>
+      ) : null}
+
+      {activeTab === 'physicalTable' ? (
+        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
+          <SectionHeader icon={<Network className="h-5 w-5" />} title="接入规则" />
+
+          {isSecurityRelationsLoading ? (
+            <div className="py-10 text-center text-[0.875rem] text-[var(--text-muted)]">正在加载数据源与接入规则...</div>
+          ) : securityRelationsError ? (
+            <div className="mt-5 rounded-[12px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-4 text-[0.8125rem] text-[var(--status-danger-text)]">{securityRelationsError}</div>
+          ) : (
+            <>
+              <div className="mt-5">
+                <div className="mb-3 text-[0.875rem] font-semibold text-[var(--text-main)]">关联数据源与安全接入规则</div>
+                <div className="grid gap-4">
+                  {securityRelations.sources.map((source) => {
+                    const security = sourceSecuritySummary(source)
+                    const tags = normalizeArray(source.source_tags).map(String)
+                    return (
+                      <article key={String(source.id)} className="rounded-[16px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] p-4 shadow-[var(--shadow-soft)]">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[0.75rem] text-[var(--text-muted)]">{String(source.source_code || '未配置编码')}</div>
+                            <div className="mt-1 text-[1rem] font-semibold text-[var(--text-main)]">{String(source.source_name || '未命名数据源')}</div>
+                          </div>
+                          <span className="rounded-full bg-[var(--status-success-bg)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--status-success-text)]">{formatSecurityV3Value(source.connection_status)}</span>
+                        </div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                          {[
+                            ['来源类型', sourceTypeLabel(source.source_type)],
+                            ['责任部门', String(source.owner_dept || '未标注')],
+                            ['传输保护', security.transport],
+                            ['完整性校验', security.integrity],
+                            ['访问模式', security.readOnly],
+                            ['连接超时', security.timeout],
+                            ['字段校验规则', validationRuleSummary(source)],
+                            ['最后检查', formatDateTime(source.last_checked_at)],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-[10px] bg-[var(--surface-muted)] px-3 py-3">
+                              <div className="text-[0.6875rem] text-[var(--text-muted)]">{label}</div>
+                              <div className="mt-1 text-[0.8125rem] font-medium leading-6 text-[var(--text-main)]">{value}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {tags.length ? <div className="mt-4 flex flex-wrap gap-2">{tags.map((tag) => <TopicPill key={tag}>{tag}</TopicPill>)}</div> : null}
+                      </article>
+                    )
+                  })}
+                  {securityRelations.sources.length === 0 ? (
+                    <div className="rounded-[14px] border border-dashed border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-8 text-center text-[0.875rem] text-[var(--text-secondary)]">当前资源和关联 API 均未绑定数据源。</div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-6 border-t border-[var(--surface-outline)] pt-5">
+                <div className="mb-3 text-[0.875rem] font-semibold text-[var(--text-main)]">规则抽样与逐条校验</div>
+                <ResourceIngestSamplesPanel
+                  data={ingestSamples}
+                  isLoading={isIngestSamplesLoading}
+                  error={ingestSamplesError}
+                  onRefresh={() => void refreshIngestSamples()}
+                />
+              </div>
+
+              <div className="mt-6 overflow-hidden rounded-[12px] border border-[var(--surface-outline)] bg-[var(--surface-raised)]">
+                <div className="border-b border-[var(--surface-outline)] bg-[var(--table-header-bg)] px-4 py-3 text-[0.875rem] font-semibold text-[var(--text-main)]">最近接入规则执行日志</div>
+                {securityRelations.ingestLogs.length ? securityRelations.ingestLogs.slice(0, 10).map((log) => (
+                  <div key={String(log.id)} className="grid gap-2 border-b border-[var(--surface-outline)] px-4 py-3 last:border-b-0 md:grid-cols-[1.1fr_1fr_1fr_0.8fr]">
+                    <div className="text-[0.8125rem] font-medium text-[var(--text-main)]">{String(log.batch_code || '未编号批次')}</div>
+                    <div className="text-[0.8125rem] text-[var(--text-secondary)]">{formatSecurityV3Value(log.execution_type)}</div>
+                    <div className="text-[0.8125rem] text-[var(--text-secondary)]">{formatDateTime(log.started_at)}</div>
+                    <div className="text-[0.8125rem] text-[var(--text-secondary)]">{formatSecurityV3Value(log.result_status)} · 拒绝 {Number(log.rejected_count || 0)}</div>
+                  </div>
+                )) : <div className="px-4 py-8 text-center text-[0.875rem] text-[var(--text-muted)]">尚未产生接入规则执行日志。</div>}
+              </div>
+            </>
+          )}
         </section>
       ) : null}
 
@@ -621,9 +770,6 @@ export function SecurityGovernanceDetailPage() {
           <div className="mt-5">
             <ResourceApisPanel
               resourceId={String(item.id)}
-              resourceCode={item.code}
-              resourceName={item.name}
-              dataSourceId={securityRelations.sources[0]?.id ? String(securityRelations.sources[0].id) : undefined}
               canManage={canManageResources}
             />
           </div>
@@ -639,6 +785,15 @@ export function SecurityGovernanceDetailPage() {
         </section>
       ) : null}
 
+      {activeTab === 'accessSubjects' ? (
+        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
+          <SectionHeader icon={<Users className="h-5 w-5" />} title="访问主体" />
+          <div className="mt-5">
+            <ResourceAccessSubjectsPanel resourceId={String(item.id)} canManage={canManageResources} />
+          </div>
+        </section>
+      ) : null}
+
       {activeTab === 'homomorphic' ? (
         <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
           <SectionHeader icon={<LockKeyhole className="h-5 w-5" />} title="同态加密" />
@@ -649,77 +804,6 @@ export function SecurityGovernanceDetailPage() {
               canManage={canManageResources}
             />
           </div>
-        </section>
-      ) : null}
-
-      {activeTab === 'accessInfo' ? (
-        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
-          <SectionHeader icon={<Network className="h-5 w-5" />} title="安全接入" />
-
-          {isSecurityRelationsLoading ? (
-            <div className="py-10 text-center text-[0.875rem] text-[var(--text-muted)]">正在加载数据源与接入安全信息...</div>
-          ) : securityRelationsError ? (
-            <div className="mt-5 rounded-[12px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-4 text-[0.8125rem] text-[var(--status-danger-text)]">{securityRelationsError}</div>
-          ) : (
-            <>
-              <div className="mt-5 grid gap-4">
-                {securityRelations.sources.map((source) => {
-                  const security = sourceSecuritySummary(source)
-                  const tags = normalizeArray(source.source_tags).map(String)
-                  return (
-                    <article key={String(source.id)} className="rounded-[16px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] p-4 shadow-[var(--shadow-soft)]">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="text-[0.75rem] text-[var(--text-muted)]">{String(source.source_code || '未配置编码')}</div>
-                          <div className="mt-1 text-[1rem] font-semibold text-[var(--text-main)]">{String(source.source_name || '未命名数据源')}</div>
-                        </div>
-                        <span className="rounded-full bg-[var(--status-success-bg)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--status-success-text)]">{formatSecurityV3Value(source.connection_status)}</span>
-                      </div>
-                      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                        {[
-                          ['来源类型', sourceTypeLabel(source.source_type)],
-                          ['责任部门', String(source.owner_dept || '未标注')],
-                          ['传输保护', security.transport],
-                          ['完整性校验', security.integrity],
-                          ['访问模式', security.readOnly],
-                          ['连接超时', security.timeout],
-                          ['校验规则', validationRuleSummary(source)],
-                          ['最后检查', formatDateTime(source.last_checked_at)],
-                        ].map(([label, value]) => (
-                          <div key={label} className="rounded-[10px] bg-[var(--surface-muted)] px-3 py-3">
-                            <div className="text-[0.6875rem] text-[var(--text-muted)]">{label}</div>
-                            <div className="mt-1 text-[0.8125rem] font-medium leading-6 text-[var(--text-main)]">{value}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {tags.length ? <div className="mt-4 flex flex-wrap gap-2">{tags.map((tag) => <TopicPill key={tag}>{tag}</TopicPill>)}</div> : null}
-                    </article>
-                  )
-                })}
-                {securityRelations.sources.length === 0 ? (
-                  <div className="rounded-[14px] border border-dashed border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-8 text-center text-[0.875rem] text-[var(--text-secondary)]">当前资源和关联 API 均未绑定数据源。</div>
-                ) : null}
-              </div>
-
-              <div className="mt-6 grid gap-4 md:grid-cols-3">
-                <StatCard title="访问策略" value={`${securityRelations.accessPolicies.length} 条`} hideRail tone="blue" icon={<ShieldCheck className="h-4 w-4" />} />
-                <StatCard title="同态任务" value={`${securityRelations.homomorphicTasks.length} 项`} hideRail tone="green" icon={<LockKeyhole className="h-4 w-4" />} />
-                <StatCard title="最近接入记录" value={`${securityRelations.ingestLogs.length} 条`} hideRail tone="blue" icon={<ScrollText className="h-4 w-4" />} />
-              </div>
-
-              <div className="mt-6 overflow-hidden rounded-[12px] border border-[var(--surface-outline)] bg-[var(--surface-raised)]">
-                <div className="border-b border-[var(--surface-outline)] bg-[var(--table-header-bg)] px-4 py-3 text-[0.875rem] font-semibold text-[var(--text-main)]">最近接入校验</div>
-                {securityRelations.ingestLogs.length ? securityRelations.ingestLogs.slice(0, 5).map((log) => (
-                  <div key={String(log.id)} className="grid gap-2 border-b border-[var(--surface-outline)] px-4 py-3 last:border-b-0 md:grid-cols-[1.1fr_1fr_1fr_0.8fr]">
-                    <div className="text-[0.8125rem] font-medium text-[var(--text-main)]">{String(log.batch_code || '未编号批次')}</div>
-                    <div className="text-[0.8125rem] text-[var(--text-secondary)]">{formatSecurityV3Value(log.execution_type)}</div>
-                    <div className="text-[0.8125rem] text-[var(--text-secondary)]">{formatDateTime(log.started_at)}</div>
-                    <div className="text-[0.8125rem] text-[var(--text-secondary)]">{formatSecurityV3Value(log.result_status)} · 拒绝 {Number(log.rejected_count || 0)}</div>
-                  </div>
-                )) : <div className="px-4 py-8 text-center text-[0.875rem] text-[var(--text-muted)]">尚未产生接入校验记录。</div>}
-              </div>
-            </>
-          )}
         </section>
       ) : null}
 
@@ -770,6 +854,28 @@ export function SecurityGovernanceDetailPage() {
             </div>
           ) : null}
         </section>
+      ) : null}
+
+      {canManageResources ? (
+        <ResourceEditDialog
+          open={isEditDialogOpen}
+          mode="edit"
+          variant="drawer"
+          resourceId={item.id}
+          categoryTree={categoryTree}
+          informationCategoryTree={informationCategoryTree}
+          sourceTree={sourceTree}
+          regionTree={regionTree}
+          editOptions={editOptions}
+          securityGovernanceMode
+          dataSourceOptions={dataSourceOptions}
+          onClose={() => setIsEditDialogOpen(false)}
+          onSaved={async () => {
+            await refresh()
+            await ensureDefaultSecurityApi(item.id).catch(() => undefined)
+            setEditNotice('数据资源已保存，详情信息和唯一查询 API 已重新同步。')
+          }}
+        />
       ) : null}
 
     </div>

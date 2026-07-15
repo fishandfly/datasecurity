@@ -6,6 +6,7 @@ export type SecurityGovernanceJoinedItem = {
   id: string
   policyId: string
   resourceId: string
+  code: string
   name: string
   summary: string
   department: string
@@ -195,6 +196,7 @@ export function joinSecurityGovernanceItems(
       id: policy.id,
       policyId: policy.id,
       resourceId: policy.resourceId,
+      code: catalogItem?.code || '',
       name: policy.resourceName || catalogItem?.name || '未命名资源',
       summary: catalogItem?.summary || catalogItem?.description || '',
       department: catalogItem?.department || policy.securityOwnerDept || '',
@@ -250,6 +252,7 @@ export function joinSecurityGovernanceItems(
       id: `resource-${item.id}`,
       policyId: '',
       resourceId: item.id,
+      code: item.code || '',
       name: item.name || '未命名资源',
       summary: item.summary || item.description || '',
       department: item.department || '',
@@ -305,6 +308,7 @@ function matchesKeyword(item: SecurityGovernanceJoinedItem, keyword: string) {
   if (!keyword) return true
 
   return [
+    item.code,
     item.name,
     item.summary,
     item.serviceType,

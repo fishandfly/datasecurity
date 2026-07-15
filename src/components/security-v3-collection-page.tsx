@@ -19,6 +19,8 @@ export type SecurityV3FormField = {
   label: string
   type?: 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'json' | 'datetime'
   required?: boolean
+  min?: number
+  max?: number
   options?: SecurityV3Option[]
   defaultValue?: unknown
   relation?: { collection: string; valueKey?: string; labelKey: string; filter?: Record<string, unknown> }
@@ -59,6 +61,7 @@ export type SecurityV3CollectionPageConfig = {
   canEdit?: (record: SecurityV3Record) => boolean
   extraActions?: ReactNode
   rowActions?: SecurityV3RowAction[]
+  onRecordsChange?: (records: SecurityV3Record[]) => void
   transformSaveValues?: (
     values: Record<string, unknown>,
     context: { mode: 'edit' | 'create'; record: SecurityV3Record | null },
@@ -134,6 +137,11 @@ function RecordDrawer({
       let values = toSaveValues(fields, form)
       for (const field of fields) {
         if (field.required && (values[field.name] === '' || values[field.name] == null)) throw new Error(`请填写${field.label}`)
+        if (field.type === 'number' && values[field.name] != null) {
+          const numberValue = Number(values[field.name])
+          if (field.min != null && numberValue < field.min) throw new Error(`${field.label}不能小于 ${field.min}`)
+          if (field.max != null && numberValue > field.max) throw new Error(`${field.label}不能大于 ${field.max}`)
+        }
       }
       if (config.transformSaveValues) {
         values = await config.transformSaveValues(values, { mode: mode === 'edit' ? 'edit' : 'create', record })
@@ -172,7 +180,7 @@ function RecordDrawer({
                     {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                 ) : (
-                  <input type={field.type === 'number' ? 'number' : field.type === 'datetime' ? 'datetime-local' : 'text'} disabled={readOnly || field.readOnly} className={inputClassName} value={String(value ?? '')} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))} />
+                  <input type={field.type === 'number' ? 'number' : field.type === 'datetime' ? 'datetime-local' : 'text'} min={field.min} max={field.max} disabled={readOnly || field.readOnly} className={inputClassName} value={String(value ?? '')} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))} />
                 )}
               </label>
             )
@@ -207,13 +215,15 @@ export function SecurityV3CollectionPage({ config, embedded = false }: { config:
         appends: config.appends,
         sort: config.sort ?? ['-updatedAt', '-createdAt'],
       })
-      setRows(config.rowFilter ? records.filter(config.rowFilter) : records)
+      const nextRows = config.rowFilter ? records.filter(config.rowFilter) : records
+      setRows(nextRows)
+      config.onRecordsChange?.(nextRows)
     } catch (currentError) {
       setError(toErrorMessage(currentError, `读取${config.title}失败`))
     } finally {
       setLoading(false)
     }
-  }, [config.appends, config.collection, config.filter, config.rowFilter, config.sort, config.title])
+  }, [config.appends, config.collection, config.filter, config.onRecordsChange, config.rowFilter, config.sort, config.title])
 
   useEffect(() => { void refresh() }, [refresh])
 

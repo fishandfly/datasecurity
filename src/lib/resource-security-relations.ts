@@ -104,3 +104,35 @@ export function useResourceSecurityRelations(resourceId: string | undefined, ena
 
   return useMemo(() => ({ data, isLoading, error, refresh }), [data, error, isLoading, refresh])
 }
+
+export function useResourceFieldCount(resourceId: string | undefined, enabled = true) {
+  const [count, setCount] = useState(0)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const refresh = useCallback(async () => {
+    if (!enabled || !resourceId) {
+      setCount(0)
+      setError('')
+      return
+    }
+    setIsLoading(true)
+    setError('')
+    try {
+      const records = await listSecurityV3Records('eco_resource_security_fields', {
+        filter: { resource_id: resourceId },
+      })
+      setCount(records.length)
+    } catch (currentError) {
+      setError(toErrorMessage(currentError, '加载资源字段数量失败'))
+    } finally {
+      setIsLoading(false)
+    }
+  }, [enabled, resourceId])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  return useMemo(() => ({ count, isLoading, error, refresh }), [count, error, isLoading, refresh])
+}

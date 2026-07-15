@@ -110,7 +110,6 @@ export type CatalogLinkInfo = {
 export type CatalogItem = {
   id: string
   code: string
-  resourceStatus: string
   name: string
   categoryId: string
   category: string
@@ -238,7 +237,6 @@ type RawResource = {
   displaySeq?: number | string | null
   resource_name?: string | null
   resource_code?: string | null
-  resource_status?: string | null
   summary?: string | null
   contact_info?: string | null
   field_count?: number | string | null
@@ -326,7 +324,6 @@ const PORTAL_LIST_RESOURCE_FIELDS = [
   'display_seq',
   'resource_name',
   'resource_code',
-  'resource_status',
   'summary',
   'contact_info',
   'published_at',
@@ -1489,7 +1486,6 @@ function mapResource(
   return {
     id: String(resource.id),
     code,
-    resourceStatus: text(resource.resource_status, 'enabled'),
     name,
     categoryId,
     category,
@@ -1661,7 +1657,7 @@ async function fetchPortalDataInternal(mode: PortalDataMode) {
     }, PORTAL_DICTIONARY_PAGE_SIZE),
     resourcesPromise,
   ])
-  allResources = allResourcesResult.filter((resource) => resource.resource_status !== 'disabled')
+  allResources = allResourcesResult
 
   // Process Dictionaries
   const dictMap: DictionaryMap = {}

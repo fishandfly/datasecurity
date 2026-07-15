@@ -85,7 +85,6 @@ function createCatalogItem(overrides: Partial<CatalogItem> & Pick<CatalogItem, '
   return {
     id,
     code,
-    resourceStatus: overrides.resourceStatus ?? 'enabled',
     name,
     categoryId,
     category: overrides.category ?? '量测采集数据',

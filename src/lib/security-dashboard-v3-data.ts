@@ -166,7 +166,7 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
     listSecurityV3Records('security_confidential_tasks', { appends: ['subject'] }),
   ])
 
-  const resources = allResources.filter((item) => item.resource_status === 'enabled')
+  const resources = allResources
   const resourceIds = new Set(resources.map((item) => String(item.id)))
   const fields = allFields.filter((item) => resourceIds.has(String(item.resource_id)))
   const sources = allSources.filter((item) => item.connection_status !== 'disabled')
@@ -216,7 +216,7 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
   const moduleSummaries: SecurityDashboardModuleSummary[] = [
     { id: 'data-access', title: '接入校验', path: '/security-governance/ingest/sources', value: String(sources.length), unit: '接入来源', status: alerts ? '需关注' : '运行稳定', helper: `当前接入 ${metrics.realtimeIngestRate.toLocaleString()} 条/秒`, primaryMetric: `完整性 ${integrityPassRate}%`, secondaryMetric: `传输保护 ${encryptedTransportCoverage}%`, tone: alerts ? 'amber' : 'green' },
     { id: 'resource-control', title: '数据资源', path: '/security-governance/resources/catalog', value: String(resources.length), unit: '核心资源', status: classificationCoverage === 100 ? '边界完整' : '待补标', helper: `${fields.length} 个资源字段纳入管控`, primaryMetric: `分类分级 ${classificationCoverage}%`, secondaryMetric: `字段安全 ${fieldSecurityCoverage}%`, tone: classificationCoverage === 100 ? 'green' : 'amber' },
-    { id: 'access-control', title: '访问策略', path: '/security-governance/access/policies', value: String(enabledPolicies.length), unit: '启用策略', status: pendingPolicies.length ? '待发布' : '已发布', helper: `真实调用 ${decisions.length} 次，拒绝 ${deniedRequests} 次`, primaryMetric: `策略启用 ${enabledPolicyRatio}%`, secondaryMetric: `待发布 ${pendingPolicies.length} 条`, tone: pendingPolicies.length ? 'amber' : 'green' },
+    { id: 'access-control', title: '访问策略', path: '/security-governance/access/publish', value: String(enabledPolicies.length), unit: '启用策略', status: pendingPolicies.length ? '待发布' : '已发布', helper: `真实调用 ${decisions.length} 次，拒绝 ${deniedRequests} 次`, primaryMetric: `策略启用 ${enabledPolicyRatio}%`, secondaryMetric: `待发布 ${pendingPolicies.length} 条`, tone: pendingPolicies.length ? 'amber' : 'green' },
     { id: 'risk-events', title: '风险事件', path: '/security-governance/risks/events', value: String(risks.length), unit: '风险事件', status: pendingRisks ? '待处置' : '无待办', helper: `高风险 ${risks.filter((item) => riskLabel(item.risk_level) === '高').length} 项`, primaryMetric: `待处置 ${pendingRisks} 项`, secondaryMetric: `真实拒绝 ${deniedRequests} 次`, tone: pendingRisks ? 'red' : 'blue' },
     { id: 'homomorphic-encryption', title: '同态加密', path: '/security-governance/homomorphic/tasks', value: String(tasks.length), unit: '验证任务', status: pendingTasks ? '待执行' : completedTasks ? '已完成' : '暂无任务', helper: `成功 ${completedTasks} 项，阶段事件 ${taskEventCount} 条`, primaryMetric: `待处理 ${pendingTasks} 项`, secondaryMetric: `失败 ${failedTasks} 项`, tone: failedTasks ? 'red' : pendingTasks ? 'amber' : 'blue' },
   ]
@@ -233,7 +233,7 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
   const coreMetrics: SecurityDashboardCoreMetric[] = [
     { key: 'resources', label: '核心资源', value: resources.length, helper: `字段安全覆盖 ${fieldSecurityCoverage}%`, path: '/security-governance/resources/catalog', tone: 'blue', trend: sourceRates },
     { key: 'apis', label: '资源 API', value: apis.length, helper: `已发布 ${apis.filter((item) => item.publish_status === 'success').length} 个`, path: '/security-governance/resources/catalog', tone: 'green', trend: apis.map((item) => number(item.publish_version)) },
-    { key: 'policies', label: '启用策略', value: enabledPolicies.length, helper: `待发布 ${pendingPolicies.length} 条`, path: '/security-governance/access/policies', tone: 'amber', trend: policies.map((item) => number(item.policy_version)) },
+    { key: 'policies', label: '启用策略', value: enabledPolicies.length, helper: `待发布 ${pendingPolicies.length} 条`, path: '/security-governance/access/publish', tone: 'amber', trend: policies.map((item) => number(item.policy_version)) },
     { key: 'requests', label: '访问调用', value: decisions.length, helper: '来自真实决策日志', path: '/security-governance/access/audit', tone: 'blue', trend: decisions.map((item) => number(item.duration_ms)) },
     { key: 'rejects', label: '拒绝调用', value: deniedRequests, helper: '仅统计真实拒绝决策', path: '/security-governance/access/audit', tone: deniedRequests ? 'red' : 'green', trend: decisions.map((item) => ['deny', 'denied', '拒绝'].includes(String(item.decision_result)) ? 100 : 0) },
     { key: 'risks', label: '风险事件', value: risks.length, helper: `待处置 ${pendingRisks} 项`, path: '/security-governance/risks/events', tone: pendingRisks ? 'red' : 'green', trend: risks.map((item) => number(item.risk_score)) },

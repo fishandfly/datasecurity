@@ -33,3 +33,17 @@ test('访问策略提供资源级异常访问处置且不使用字段白名单',
   assert.match(runtimeSource, /"scopeViolation"/)
   assert.doesNotMatch(runtimeSource, /policy\.get\("field_allowlist_json"\)/)
 })
+
+test('行为基线页面提供查询跨度和返回行数标准差配置', () => {
+  assert.match(pageSource, /name: 'query_days_stddev', label: '查询天数标准差', type: 'number', min: 0/)
+  assert.match(pageSource, /name: 'rows_stddev', label: '返回行数标准差', type: 'number', min: 0/)
+  assert.match(pageSource, /name: 'failure_avg'/)
+  assert.match(pageSource, /name: 'generated_at'/)
+})
+
+test('异常规则使用配置风险分和策略阈值且校验风险分范围', () => {
+  assert.match(runtimeSource, /policy, "behaviorAnomaly", behavior_score > 0/)
+  assert.match(runtimeSource, /if score >= threshold:/)
+  assert.doesNotMatch(runtimeSource, /score >= threshold or score >= 70/)
+  assert.match(runtimeSource, /riskScore 必须在 0 到 100 之间/)
+})

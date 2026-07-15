@@ -8,7 +8,6 @@ type RawEditableResource = {
   resource_name?: string | null
   data_source_id?: number | string | null
   protection_level?: string | null
-  resource_status?: string | null
   summary?: string | null
   contact_info?: string | null
   domain_category_id?: number | string | null
@@ -24,6 +23,7 @@ type RawEditableResource = {
   region_coverage?: string | null
   remarks?: string | null
   tags?: unknown
+  source_table?: string | null
   stat_base?: unknown
   access_url?: unknown
 }
@@ -34,7 +34,6 @@ export type EditableResourceRecord = {
   resourceName: string
   dataSourceId: string
   protectionLevel: string
-  resourceStatus: string
   summary: string
   contactInfo: string
   domainCategoryId: string
@@ -50,6 +49,10 @@ export type EditableResourceRecord = {
   regionCoverage: string
   remarks: string
   tags: string[]
+  baselineTable: string
+  querySql: string
+  queryDefaultParamsText: string
+  statBase: Record<string, unknown>
 }
 
 export type EditableResourceLinkItem = {
@@ -70,7 +73,6 @@ const EMPTY_EDITABLE_RESOURCE: EditableResourceRecord = {
   resourceName: '',
   dataSourceId: '',
   protectionLevel: 'l2',
-  resourceStatus: 'enabled',
   summary: '',
   contactInfo: '',
   domainCategoryId: '',
@@ -86,6 +88,10 @@ const EMPTY_EDITABLE_RESOURCE: EditableResourceRecord = {
   regionCoverage: '',
   remarks: '',
   tags: [],
+  baselineTable: '',
+  querySql: '',
+  queryDefaultParamsText: '{}',
+  statBase: {},
 }
 
 const EMPTY_EDITABLE_RESOURCE_LINKS: EditableResourceLinkRecord = {
@@ -239,13 +245,15 @@ function buildAccessUrlValues(values: EditableResourceLinkRecord) {
 function mapEditableResource(raw: RawEditableResource): EditableResourceRecord {
   const providerOrgId = normalizeId(raw.provider_org_id)
   const providerUnitId = normalizeId(raw.provider_unit_id)
+  const statBase = parseJsonRecord(raw.stat_base)
+  const apiQuery = parseJsonRecord(statBase.api_query ?? statBase.apiQuery)
+  const defaultParams = parseJsonRecord(apiQuery.default_params ?? apiQuery.defaultParams)
   return {
     id: normalizeId(raw.id),
     resourceCode: normalizeText(raw.resource_code),
     resourceName: normalizeText(raw.resource_name),
     dataSourceId: normalizeId(raw.data_source_id),
     protectionLevel: normalizeText(raw.protection_level) || 'l2',
-    resourceStatus: normalizeText(raw.resource_status) || 'enabled',
     summary: normalizeText(raw.summary),
     contactInfo: normalizeText(raw.contact_info),
     domainCategoryId: normalizeId(raw.domain_category_id),
@@ -261,6 +269,10 @@ function mapEditableResource(raw: RawEditableResource): EditableResourceRecord {
     regionCoverage: normalizeText(raw.region_coverage),
     remarks: normalizeText(raw.remarks),
     tags: normalizeTags(raw.tags),
+    baselineTable: normalizeText(statBase.base_table_name ?? statBase.baseTableName ?? raw.source_table),
+    querySql: normalizeText(apiQuery.query_sql ?? apiQuery.querySql),
+    queryDefaultParamsText: JSON.stringify(defaultParams, null, 2),
+    statBase,
   }
 }
 
@@ -273,13 +285,14 @@ export function createEmptyEditableResourceLinkRecord(): EditableResourceLinkRec
 
 function buildEditableResourceValues(values: EditableResourceRecord) {
   const normalizedProviderId = toNullableId(values.providerNodeId)
+  const queryDefaultParams = parseDefaultParams(values.queryDefaultParamsText)
+  const baselineTable = values.baselineTable.trim()
 
   return {
     resource_code: values.resourceCode.trim(),
     resource_name: values.resourceName.trim(),
     data_source_id: toNullableId(values.dataSourceId),
     protection_level: values.protectionLevel.trim() || 'l2',
-    resource_status: values.resourceStatus.trim() || 'enabled',
     summary: values.summary.trim(),
     contact_info: values.contactInfo.trim(),
     domain_category_id: toNullableId(values.domainCategoryId),
@@ -295,7 +308,31 @@ function buildEditableResourceValues(values: EditableResourceRecord) {
     region_coverage: values.regionCoverage.trim(),
     remarks: values.remarks.trim(),
     tags: values.tags,
+    source_table: baselineTable,
+    stat_base: {
+      ...values.statBase,
+      base_table_name: baselineTable,
+      api_query: {
+        query_sql: values.querySql.trim(),
+        default_params: queryDefaultParams,
+      },
+    },
   }
+}
+
+function parseDefaultParams(value: string) {
+  const normalized = value.trim()
+  if (!normalized) return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(normalized)
+  } catch {
+    throw new Error('API 默认参数必须是有效的 JSON 对象')
+  }
+  if (!isRecord(parsed)) {
+    throw new Error('API 默认参数必须是 JSON 对象')
+  }
+  return parsed
 }
 
 function toNullableId(value: string) {

@@ -343,7 +343,6 @@ export function SecurityGovernancePage() {
       dataResourceTypeId: resolveCreateResourceTypeOptionId(editOptions.serviceTypeOptions),
       updateCycleId: resolveMinuteUpdateCycleOptionId(editOptions.updateCycleOptions),
       protectionLevel: 'l2',
-      resourceStatus: 'enabled',
       tags: [DATABASE_TABLE_LABEL],
     }),
     [activeCategoryNodeId, editOptions.serviceTypeOptions, editOptions.updateCycleOptions],
@@ -472,7 +471,7 @@ export function SecurityGovernancePage() {
                     <input
                       value={keywordInput}
                       onChange={(event) => setKeywordInput(event.target.value)}
-                      placeholder="按资源名称、数据分类、业务分类、安全分类、安全等级或风险关键词检索"
+                      placeholder="按资源编码、名称、数据分类、业务分类、安全分类、安全等级或风险关键词检索"
                       className="min-w-0 flex-1 bg-transparent text-[0.875rem] text-[var(--text-main)] outline-none placeholder:text-[var(--text-muted)]"
                     />
                     <Button type="submit" className="rounded-full px-4 py-2 text-[0.8125rem]">

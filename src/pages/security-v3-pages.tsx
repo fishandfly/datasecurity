@@ -8,12 +8,20 @@ import { useOpenFheEngineConfig } from '../lib/nocobase-security-runtime'
 import { publishSecurityApi, publishSecurityPolicy } from '../lib/security-runtime-client'
 
 const enabledOptions: SecurityV3Option[] = [{ value: 'draft', label: '草稿' }, { value: 'enabled', label: '启用' }, { value: 'disabled', label: '停用' }]
-const publishOptions: SecurityV3Option[] = [{ value: 'unpublished', label: '未发布' }, { value: 'publishing', label: '发布中' }, { value: 'success', label: '发布成功' }, { value: 'failed', label: '发布失败' }]
 const outputOptions: SecurityV3Option[] = [{ value: 'detail', label: '明细' }, { value: 'masked', label: '脱敏' }, { value: 'aggregate', label: '聚合' }, { value: 'encrypted', label: '密态' }]
 const homomorphicAlgorithmOptions: SecurityV3Option[] = [{ value: 'bfv', label: '整数精确型' }, { value: 'ckks', label: '浮点近似型' }]
 
 function homomorphicAlgorithmLabel(value: unknown) {
   return ['ckks', 'float_approx'].includes(String(value || '').toLowerCase()) ? '浮点近似型' : '整数精确型'
+}
+
+function formatLocalDateTime(value: unknown) {
+  const normalized = String(value ?? '').trim()
+  if (!normalized) return '-'
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return normalized.replace('T', ' ')
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
 const apiResourcesConfig: SecurityV3CollectionPageConfig = {
@@ -85,8 +93,8 @@ const subjectsConfig: SecurityV3CollectionPageConfig = {
 }
 
 const policiesConfig: SecurityV3CollectionPageConfig = {
-  module: 'access', title: '访问策略', collection: 'eco_resource_security_policies', filter: { policy_kind: 'access_policy' }, appends: ['subject', 'api_resource'],
-  columns: [{ key: 'policy_code', label: '策略编码' }, { key: 'policy_name', label: '策略名称' }, { key: 'subject', label: '访问主体' }, { key: 'api_resource', label: 'API 资源' }, { key: 'output_mode', label: '输出模式' }, { key: 'risk_threshold', label: '风险阈值' }, { key: 'policy_status', label: '状态', tone: 'status' }, { key: 'publish_status', label: '发布', tone: 'status' }],
+  module: 'access', title: '访问策略', createLabel: '新增访问策略', collection: 'eco_resource_security_policies', filter: { policy_kind: 'access_policy' }, appends: ['subject', 'api_resource'],
+  columns: [{ key: 'policy_code', label: '策略编码' }, { key: 'policy_name', label: '策略名称' }, { key: 'subject', label: '访问主体' }, { key: 'api_resource', label: 'API 资源' }, { key: 'output_mode', label: '输出模式' }, { key: 'risk_threshold', label: '风险阈值' }, { key: 'policy_version', label: '策略版本' }, { key: 'publish_status', label: '发布状态', tone: 'status' }, { key: 'published_at', label: '发布时间', value: (record) => formatLocalDateTime(record.published_at) }],
   fields: [
     { name: 'policy_code', label: '策略编码', required: true }, { name: 'policy_name', label: '策略名称', required: true }, { name: 'policy_kind', label: '策略类型', type: 'select', options: [{ value: 'access_policy', label: '访问策略' }], defaultValue: 'access_policy' },
     { name: 'resource_id', label: '数据资源', required: true, relation: { collection: 'eco_data_resources', labelKey: 'resource_name' } },
@@ -99,6 +107,14 @@ const policiesConfig: SecurityV3CollectionPageConfig = {
     { name: 'abnormal_access_rules_json', label: '异常访问处置规则', type: 'json', required: true, defaultValue: { offHours: { enabled: true, action: 'deny', riskScore: 70 }, highFrequency: { enabled: true, action: 'deny', riskScore: 70 }, queryRangeExceeded: { enabled: true, action: 'deny', riskScore: 60 }, rowLimitExceeded: { enabled: true, action: 'deny', riskScore: 70 }, scopeViolation: { enabled: true, action: 'deny', riskScore: 80 }, behaviorAnomaly: { enabled: true, action: 'risk', riskScore: 20 } } },
   ],
   transformSaveValues: (values) => ({ ...values, publish_status: 'unpublished', publish_error: null }),
+  rowActions: [{
+    key: 'publish-policy', title: '发布', icon: UploadCloud,
+    execute: async (record) => {
+      const result = await publishSecurityPolicy(String(record.id || ''))
+      return `策略已发布，版本 V${result.policyVersion}`
+    },
+  }],
+  extraActions: <SecurityRuntimeStatusAction />,
 }
 
 const baselinesConfig: SecurityV3CollectionPageConfig = {
@@ -106,24 +122,13 @@ const baselinesConfig: SecurityV3CollectionPageConfig = {
   columns: [{ key: 'baseline_code', label: '基线编码' }, { key: 'subject', label: '访问主体' }, { key: 'api_resource', label: 'API 资源' }, { key: 'sample_count', label: '样本数' }, { key: 'frequency_avg', label: '平均频率' }, { key: 'query_days_avg', label: '平均查询天数' }, { key: 'rows_avg', label: '平均行数' }, { key: 'baseline_status', label: '状态', tone: 'status' }],
   fields: [
     { name: 'baseline_code', label: '基线编码', required: true }, { name: 'subject_id', label: '访问主体', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name' } }, { name: 'api_resource_id', label: 'API 资源', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
-    { name: 'sample_from', label: '样本开始时间', type: 'datetime' }, { name: 'sample_to', label: '样本结束时间', type: 'datetime' }, { name: 'sample_count', label: '样本数', type: 'number' },
-    { name: 'frequency_avg', label: '平均频率', type: 'number' }, { name: 'frequency_stddev', label: '频率标准差', type: 'number' }, { name: 'query_days_avg', label: '平均查询天数', type: 'number' }, { name: 'rows_avg', label: '平均行数', type: 'number' },
-    { name: 'normal_time_ranges_json', label: '正常时段', type: 'json', defaultValue: [] }, { name: 'baseline_version', label: '基线版本', type: 'number', defaultValue: 1 }, { name: 'baseline_status', label: '基线状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
+    { name: 'sample_from', label: '样本开始时间', type: 'datetime' }, { name: 'sample_to', label: '样本结束时间', type: 'datetime' }, { name: 'sample_count', label: '样本数', type: 'number', min: 0 },
+    { name: 'frequency_avg', label: '平均频率', type: 'number', min: 0 }, { name: 'frequency_stddev', label: '频率标准差', type: 'number', min: 0 },
+    { name: 'query_days_avg', label: '平均查询天数', type: 'number', min: 0 }, { name: 'query_days_stddev', label: '查询天数标准差', type: 'number', min: 0 },
+    { name: 'rows_avg', label: '平均行数', type: 'number', min: 0 }, { name: 'rows_stddev', label: '返回行数标准差', type: 'number', min: 0 },
+    { name: 'normal_time_ranges_json', label: '正常时段', type: 'json', defaultValue: [] }, { name: 'failure_avg', label: '平均失败次数', type: 'number', min: 0, defaultValue: 0 },
+    { name: 'generated_at', label: '生成时间', type: 'datetime' }, { name: 'baseline_version', label: '基线版本', type: 'number', min: 1, defaultValue: 1 }, { name: 'baseline_status', label: '基线状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
   ],
-}
-
-const publishConfig: SecurityV3CollectionPageConfig = {
-  ...policiesConfig, title: '策略发布', readOnly: true, canCreate: false,
-  columns: [{ key: 'policy_code', label: '策略编码' }, { key: 'policy_name', label: '策略名称' }, { key: 'policy_version', label: '策略版本' }, { key: 'gateway_config_version', label: '运行配置版本' }, { key: 'publish_status', label: '发布状态', tone: 'status' }, { key: 'published_at', label: '发布时间' }, { key: 'publish_error', label: '失败原因' }],
-  fields: [{ name: 'policy_code', label: '策略编码', readOnly: true }, { name: 'policy_name', label: '策略名称', readOnly: true }, { name: 'policy_version', label: '策略版本', type: 'number', readOnly: true }, { name: 'publish_status', label: '发布状态', type: 'select', options: publishOptions, readOnly: true }, { name: 'published_at', label: '发布时间', type: 'datetime', readOnly: true }, { name: 'gateway_config_version', label: '运行配置版本', readOnly: true }, { name: 'publish_error', label: '失败原因', type: 'textarea', readOnly: true }],
-  rowActions: [{
-    key: 'publish-policy', title: '校验并发布', icon: UploadCloud,
-    execute: async (record) => {
-      const result = await publishSecurityPolicy(String(record.id || ''))
-      return `策略已发布，版本 ${result.policyVersion}`
-    },
-  }],
-  extraActions: <SecurityRuntimeStatusAction />,
 }
 
 const auditConfig: SecurityV3CollectionPageConfig = {
@@ -213,9 +218,8 @@ export function SecurityTagRulesPage() { return <SecurityV3CollectionPage config
 export function SecurityIngestLogsPage() { return <SecurityV3CollectionPage config={{ ...ingestLogsBase, title: '接入日志' }} /> }
 export function SecurityTagResultsPage() { return <SecurityV3CollectionPage config={{ ...ingestLogsBase, module: 'tags', title: '标注记录', filter: { execution_type: 'tagging' } }} /> }
 export function SecurityAccessSubjectsPage() { return <SecurityV3CollectionPage config={subjectsConfig} /> }
-export function SecurityAccessPoliciesPage() { return <SecurityV3CollectionPage config={policiesConfig} /> }
 export function SecurityBehaviorBaselinesPage() { return <SecurityV3CollectionPage config={baselinesConfig} /> }
-export function SecurityPolicyPublishPage() { return <SecurityV3CollectionPage config={publishConfig} /> }
+export function SecurityPolicyPublishPage() { return <SecurityV3CollectionPage config={policiesConfig} /> }
 export function SecurityDecisionAuditPage() { return <SecurityV3CollectionPage config={auditConfig} /> }
 export function SecurityRiskEventsPage() { return <SecurityV3CollectionPage config={risksConfig} /> }
 export function SecurityCryptoKeysPage() { return <SecurityV3CollectionPage config={keysConfig} /> }

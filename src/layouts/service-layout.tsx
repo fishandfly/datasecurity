@@ -25,6 +25,7 @@ const securityPrimaryPrefixes: Record<string, string> = {
   '/security-governance/ingest/sources': '/security-governance/ingest',
   '/security-governance/tags/catalog': '/security-governance/tags',
   '/security-governance/access/policies': '/security-governance/access',
+  '/security-governance/access/publish': '/security-governance/access',
   '/security-governance/risks/events': '/security-governance/risks',
   '/security-governance/homomorphic/tasks': '/security-governance/homomorphic',
 }

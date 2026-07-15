@@ -212,6 +212,25 @@ test('新建资源尚无安全档案时仍进入资源列表', async () => {
   assert.equal(joined[0].securityProfileStatus, 'unsubmitted')
 })
 
+test('数据资源支持按资源编码检索', async () => {
+  const { buildSecurityGovernanceSnapshot } = await loadSecurityGovernanceModule()
+  const target = {
+    ...items[0],
+    code: 'RES-MEASURE-001',
+    name: '吉林电网量测数据',
+  }
+
+  const snapshot = buildSecurityGovernanceSnapshot({
+    items: [target, ...items.slice(1)],
+    categoryTree,
+    informationCategoryTree,
+    filters: { keyword: 'res-measure-001' },
+  })
+
+  assert.equal(snapshot.filteredItems.length, 1)
+  assert.equal(snapshot.filteredItems[0].code, 'RES-MEASURE-001')
+})
+
 test('buildSecurityGovernanceSnapshot 基于安全总表视角生成概览和筛选项', async () => {
   const { buildSecurityGovernanceSnapshot } = await loadSecurityGovernanceModule()
 

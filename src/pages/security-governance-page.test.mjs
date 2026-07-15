@@ -479,7 +479,7 @@ test('数据资源管控页面移除资源类型 Tab 并只读取数据库表和
   assert.match(securityPageSource, /要求访问范围：/)
   assert.match(securityPageSource, /要求共享范围：/)
   assert.match(securityPageSource, /要求脱敏方式：/)
-  assert.match(securityPageSource, /按资源名称、数据分类、业务分类、安全分类、安全等级或风险关键词检索/)
+  assert.match(securityPageSource, /按资源编码、名称、数据分类、业务分类、安全分类、安全等级或风险关键词检索/)
   assert.doesNotMatch(securityPageSource, /SecurityGovernanceTabId/)
   assert.doesNotMatch(securityPageSource, /SECURITY_GOVERNANCE_TABS/)
   assert.doesNotMatch(securityPageSource, /activeTab !== 'classification'/)

@@ -1,12 +1,15 @@
 import { useMemo } from 'react'
 import { SecurityV3CollectionPage, type SecurityV3CollectionPageConfig } from './security-v3-collection-page'
+import type { SecurityV3Record } from '../lib/nocobase-security-v3'
 
 export function ResourceFieldsPanel({
   resourceId,
   homomorphicFieldCodes = new Set(),
+  onFieldsChange,
 }: {
   resourceId: string
   homomorphicFieldCodes?: Set<string>
+  onFieldsChange?: (records: SecurityV3Record[]) => void
 }) {
   const config = useMemo<SecurityV3CollectionPageConfig>(() => ({
     module: 'resources',
@@ -38,7 +41,8 @@ export function ResourceFieldsPanel({
       { name: 'description', label: '字段说明', type: 'textarea' },
     ],
     transformSaveValues: (values) => ({ ...values, resource_id: resourceId }),
-  }), [homomorphicFieldCodes, resourceId])
+    onRecordsChange: (records) => onFieldsChange?.(records),
+  }), [homomorphicFieldCodes, onFieldsChange, resourceId])
 
   return <SecurityV3CollectionPage config={config} embedded />
 }

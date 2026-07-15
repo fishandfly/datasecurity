@@ -28,6 +28,15 @@ function decisionTone(value: unknown) {
   return 'border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] text-[var(--status-warning-text)]'
 }
 
+function formatRequestTime(value: unknown) {
+  const normalized = String(value ?? '').trim()
+  if (!normalized) return '-'
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return normalized.replace('T', ' ')
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 function ResourceAccessDecisionLogs({ resourceId }: { resourceId: string }) {
   const [logs, setLogs] = useState<SecurityV3Record[]>([])
   const [loading, setLoading] = useState(true)
@@ -72,7 +81,7 @@ function ResourceAccessDecisionLogs({ resourceId }: { resourceId: string }) {
           <thead className="bg-[var(--surface-muted)] text-[var(--text-muted)]"><tr>{['请求时间', '请求编号', '访问主体', 'API', '命中策略', '决策', '决策原因', '风险', '返回行数', '耗时'].map((label) => <th key={label} className="border-b border-[var(--line)] px-4 py-3 font-medium">{label}</th>)}</tr></thead>
           <tbody>{logs.map((log) => (
             <tr key={String(log.id || log.request_id)} className="border-b border-[var(--line)] last:border-b-0 hover:bg-[var(--surface-muted)]">
-              <td className="whitespace-nowrap px-4 py-3.5 text-[var(--text-secondary)]">{String(log.requested_at || log.createdAt || '-').slice(0, 19).replace('T', ' ')}</td>
+              <td className="whitespace-nowrap px-4 py-3.5 text-[var(--text-secondary)]">{formatRequestTime(log.requested_at || log.createdAt)}</td>
               <td className="px-4 py-3.5 font-medium text-[var(--text-main)]">{formatSecurityV3Value(log.request_id)}</td>
               <td className="px-4 py-3.5 text-[var(--text-secondary)]">{formatSecurityV3Value(log.subject)}</td>
               <td className="px-4 py-3.5 text-[var(--text-secondary)]">{formatSecurityV3Value(log.api_resource)}</td>

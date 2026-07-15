@@ -193,11 +193,14 @@ export function ResourceEditDialog({
     || !form.regionCategoryId.trim()
     || !form.updateCycleId.trim()
     || !form.protectionLevel.trim()
+    || !form.baselineTable.trim()
   ))
-  const isSubmitDisabled = isLoading || isSaving || !form || (mode === 'create' && (
-    !form.resourceCode.trim()
-    || !form.resourceName.trim()
+  const isSubmitDisabled = isLoading || isSaving || !form || Boolean(form && securityGovernanceMode && (
+    !form.resourceName.trim()
     || missingSecurityRequiredField
+    || (mode === 'create' && !form.resourceCode.trim())
+  )) || Boolean(form && !securityGovernanceMode && mode === 'create' && (
+    !form.resourceCode.trim() || !form.resourceName.trim()
   ))
 
   const handleSave = async () => {
@@ -228,7 +231,7 @@ export function ResourceEditDialog({
       <div className={panelClass}>
         <div className={`${isDrawer ? 'shrink-0 ' : ''}flex items-center justify-between border-b border-[var(--dialog-divider)] px-6 py-5`}>
           <div>
-            <div className="text-[1.25rem] font-semibold text-[var(--text-main)]">{mode === 'create' ? '新建数据资源' : '编辑资源'}</div>
+            <div className="text-[1.25rem] font-semibold text-[var(--text-main)]">{mode === 'create' ? '新建数据资源' : '编辑数据资源'}</div>
           </div>
           <button
             type="button"
@@ -318,6 +321,42 @@ export function ResourceEditDialog({
                     <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">摘要</div>
                     <textarea value={form.summary} onChange={(event) => updateField('summary', event.target.value)} rows={4} className={DIALOG_TEXTAREA_CLASS} />
                   </label>
+
+                  <section className="space-y-4 rounded-2xl border border-[var(--dialog-panel-border)] bg-[linear-gradient(180deg,var(--dialog-panel-bg-start),var(--dialog-panel-bg-end))] p-4">
+                    <div>
+                      <div className="text-[0.9375rem] font-semibold text-[var(--text-main)]">数据查询与 API 参数</div>
+                      <div className="mt-1 text-[0.75rem] leading-6 text-[var(--text-muted)]">系统会根据资源和字段自动生成唯一查询 API。自定义 SQL 仅允许单条 SELECT，参数使用 :paramName 占位符。</div>
+                    </div>
+                    <label className="block space-y-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">基准物理表 <span className="text-[var(--status-danger-text)]">*</span></div>
+                      <input
+                        value={form.baselineTable}
+                        onChange={(event) => updateField('baselineTable', event.target.value)}
+                        placeholder="例如：measurement_demo.active_power_measurements"
+                        className={DIALOG_INPUT_CLASS}
+                      />
+                    </label>
+                    <label className="block space-y-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">自定义查询 SQL（可选）</div>
+                      <textarea
+                        value={form.querySql}
+                        onChange={(event) => updateField('querySql', event.target.value)}
+                        rows={6}
+                        placeholder="留空时默认按字段定义查询基准物理表全表"
+                        className={`${DIALOG_TEXTAREA_CLASS} font-mono text-[0.8125rem]`}
+                      />
+                    </label>
+                    <label className="block space-y-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">自定义 SQL 参数默认值（JSON 对象）</div>
+                      <textarea
+                        value={form.queryDefaultParamsText}
+                        onChange={(event) => updateField('queryDefaultParamsText', event.target.value)}
+                        rows={5}
+                        placeholder={'{\n  "regionCode": "REGION-A"\n}'}
+                        className={`${DIALOG_TEXTAREA_CLASS} font-mono text-[0.8125rem]`}
+                      />
+                    </label>
+                  </section>
                 </>
               ) : (
                 <>

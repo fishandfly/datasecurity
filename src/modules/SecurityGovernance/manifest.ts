@@ -14,7 +14,7 @@ export const SecurityGovernanceManifest: AppModuleManifest = {
     '/security-governance/resources/catalog',
     '/security-governance/ingest/sources',
     '/security-governance/tags/catalog',
-    '/security-governance/access/policies',
+    '/security-governance/access/publish',
     '/security-governance/risks/events',
     '/security-governance/homomorphic/tasks',
   ],

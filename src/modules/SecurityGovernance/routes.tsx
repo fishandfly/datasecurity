@@ -12,7 +12,6 @@ const SecurityTagRulesPage = lazy(async () => ({ default: (await import('../../p
 const SecurityIngestLogsPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityIngestLogsPage }))
 const SecurityTagResultsPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityTagResultsPage }))
 const SecurityAccessSubjectsPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityAccessSubjectsPage }))
-const SecurityAccessPoliciesPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityAccessPoliciesPage }))
 const SecurityBehaviorBaselinesPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityBehaviorBaselinesPage }))
 const SecurityPolicyPublishPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityPolicyPublishPage }))
 const SecurityDecisionAuditPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityDecisionAuditPage }))
@@ -48,7 +47,7 @@ export function SecurityGovernanceRoutes() {
 
       <Route path="/security-governance/access" element={<Navigate to="/security-governance/access/subjects" replace />} />
       <Route path="/security-governance/access/subjects" element={<SecurityAccessSubjectsPage />} />
-      <Route path="/security-governance/access/policies" element={<SecurityAccessPoliciesPage />} />
+      <Route path="/security-governance/access/policies" element={<Navigate to="/security-governance/access/publish" replace />} />
       <Route path="/security-governance/access/baselines" element={<SecurityBehaviorBaselinesPage />} />
       <Route path="/security-governance/access/publish" element={<SecurityPolicyPublishPage />} />
       <Route path="/security-governance/access/audit" element={<SecurityDecisionAuditPage />} />
@@ -64,7 +63,7 @@ export function SecurityGovernanceRoutes() {
 
       <Route path="/security-governance/data-access/*" element={<Navigate to="/security-governance/ingest/sources" replace />} />
       <Route path="/security-governance/access-control/classification" element={<Navigate to="/security-governance/tags/catalog" replace />} />
-      <Route path="/security-governance/access-control/policy-engine" element={<Navigate to="/security-governance/access/policies" replace />} />
+      <Route path="/security-governance/access-control/policy-engine" element={<Navigate to="/security-governance/access/publish" replace />} />
       <Route path="/security-governance/access-control/*" element={<Navigate to="/security-governance/access/subjects" replace />} />
       <Route path="/security-governance/audit/*" element={<Navigate to="/security-governance/access/audit" replace />} />
       <Route path="/security-governance/homomorphic-encryption/logs" element={<Navigate to="/security-governance/homomorphic/logs" replace />} />
@@ -73,7 +72,7 @@ export function SecurityGovernanceRoutes() {
       <Route path="/security-governance/confidential-computing" element={<Navigate to="/security-governance/homomorphic/tasks" replace />} />
       <Route path="/security-governance/source-config" element={<Navigate to="/security-governance/ingest/sources" replace />} />
       <Route path="/security-governance/data-labels" element={<Navigate to="/security-governance/tags/catalog" replace />} />
-      <Route path="/security-governance/policy-engine" element={<Navigate to="/security-governance/access/policies" replace />} />
+      <Route path="/security-governance/policy-engine" element={<Navigate to="/security-governance/access/publish" replace />} />
       <Route path="/security-governance/log-query" element={<Navigate to="/security-governance/access/audit" replace />} />
       <Route path="/security-governance/trace" element={<Navigate to="/security-governance/access/audit" replace />} />
       <Route path="/security-governance/config/*" element={<Navigate to="/security-governance/dashboard" replace />} />

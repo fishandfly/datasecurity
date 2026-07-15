@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -54,6 +55,11 @@ DEFAULT_FIELDS = [
     "active_power",
 ]
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+CUSTOM_SQL_PARAM_PATTERN = re.compile(r"(?<!:):([A-Za-z_][A-Za-z0-9_]{0,63})")
+FORBIDDEN_SQL_PATTERN = re.compile(
+    r"\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COPY|CALL|DO|EXECUTE|MERGE)\b",
+    re.IGNORECASE,
+)
 DENIALS = {
     "AUTH_MISSING": (401, "缺少访问凭据", 100),
     "API_KEY_INVALID": (401, "API Key 校验失败", 100),
@@ -166,8 +172,10 @@ def _camel_case(value: str) -> str:
 def _json_value(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
-    if isinstance(value, datetime):
+    if isinstance(value, (date, datetime)):
         return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
     return value
 
 
@@ -230,6 +238,26 @@ def _resource_table(resource: dict[str, Any], configured_table: object = "") -> 
     ).strip()
 
 
+def validate_custom_query_sql(value: object) -> tuple[str, list[str]]:
+    statement = str(value or "").strip()
+    if not statement:
+        return "", []
+    if statement.endswith(";"):
+        statement = statement[:-1].rstrip()
+    if not statement or ";" in statement or "--" in statement or "/*" in statement or "*/" in statement:
+        raise ValueError("自定义 SQL 只允许单条无注释的 SELECT 语句")
+    if not re.match(r"^SELECT\b", statement, re.IGNORECASE) or FORBIDDEN_SQL_PATTERN.search(statement):
+        raise ValueError("自定义 SQL 只允许只读 SELECT 查询")
+    parameters = list(dict.fromkeys(CUSTOM_SQL_PARAM_PATTERN.findall(statement)))
+    if any(name.startswith("__api_") for name in parameters):
+        raise ValueError("API 参数名不能使用 __api_ 前缀")
+    return statement, parameters
+
+
+def parameterize_custom_query_sql(statement: str) -> str:
+    return CUSTOM_SQL_PARAM_PATTERN.sub(lambda match: f"%({match.group(1)})s", statement)
+
+
 def build_resource_runtime_config(api: dict[str, Any]) -> tuple[dict[str, Any], int]:
     resource_id = api.get("resource_id")
     if not resource_id:
@@ -265,12 +293,18 @@ def build_resource_runtime_config(api: dict[str, Any]) -> tuple[dict[str, Any], 
         """,
         {"resource_id": resource_id},
     )
-    resource_codes = [str(item.get("field_code") or "").strip().upper() for item in fields]
-    resource_codes = list(dict.fromkeys(code for code in resource_codes if code))
+    resource_field_columns = {
+        str(item.get("field_code") or "").strip().upper(): str(item.get("field_code") or "").strip()
+        for item in fields
+        if str(item.get("field_code") or "").strip()
+    }
+    resource_codes = list(resource_field_columns)
     if not resource_codes:
         raise ValueError("数据资源尚未维护字段，无法发布 API")
 
     configured = _json_object(api.get("runtime_config_json"))
+    stat_base = _json_object(resource.get("stat_base"))
+    resource_query = _json_object(stat_base.get("api_query") or stat_base.get("apiQuery"))
     configured_map = _json_object(configured.get("fieldMap") or configured.get("field_map"))
     output_codes = {
         str(item.get("field_code") or "").strip().upper()
@@ -281,7 +315,7 @@ def build_resource_runtime_config(api: dict[str, Any]) -> tuple[dict[str, Any], 
         str(code).strip().upper(): str(column).strip()
         for code, column in configured_map.items()
         if str(code).strip() and str(column).strip()
-    } or {code: code for code in resource_codes if code in output_codes}
+    } or {code: resource_field_columns[code] for code in resource_codes if code in output_codes}
     unknown_codes = sorted(set(field_map) - set(resource_codes))
     if unknown_codes:
         raise ValueError(f"字段映射包含不属于当前资源的字段：{', '.join(unknown_codes)}")
@@ -308,6 +342,23 @@ def build_resource_runtime_config(api: dict[str, Any]) -> tuple[dict[str, Any], 
         for item in fields
         if item.get("required_desensitization") and str(item.get("field_code") or "").strip().upper() in field_map
     ]
+    query_sql, query_parameters = validate_custom_query_sql(
+        configured.get("querySql")
+        or configured.get("query_sql")
+        or resource_query.get("query_sql")
+        or resource_query.get("querySql")
+    )
+    default_params = _json_object(
+        configured.get("defaultParams")
+        or configured.get("default_params")
+        or resource_query.get("default_params")
+        or resource_query.get("defaultParams")
+    )
+    unknown_default_params = sorted(set(default_params) - set(query_parameters)) if query_sql else []
+    if default_params and not query_sql:
+        raise ValueError("配置 API 默认参数时必须同时编写引用该参数的自定义 SQL")
+    if unknown_default_params:
+        raise ValueError(f"API 默认参数未在 SQL 中引用：{', '.join(unknown_default_params)}")
 
     def configured_or_detect(camel_name: str, snake_name: str, markers: tuple[str, ...]) -> str:
         configured_code = str(configured.get(camel_name) or configured.get(snake_name) or "").strip().upper()
@@ -327,6 +378,9 @@ def build_resource_runtime_config(api: dict[str, Any]) -> tuple[dict[str, Any], 
         "timeFieldCode": configured_or_detect("timeFieldCode", "time_field_code", ("TIME", "DATE")),
         "regionFieldCode": configured_or_detect("regionFieldCode", "region_field_code", ("REGION",)),
         "organizationFieldCode": configured_or_detect("organizationFieldCode", "organization_field_code", ("ORGANIZATION", "ORG_CODE")),
+        "querySql": query_sql,
+        "queryParams": query_parameters,
+        "defaultParams": default_params,
     }, int(source_id)
 
 
@@ -337,13 +391,217 @@ def verify_resource_runtime_config(api: dict[str, Any]) -> None:
         {"id": api.get("data_source_id")},
     ) or {}
     dialect = str(_json_object(source.get("connection_options_json")).get("dialect") or "postgresql").lower()
+    query_sql, query_parameters = validate_custom_query_sql(config.get("querySql") or config.get("query_sql"))
     table_name = _quote_identifier(config.get("table"), dialect)
     columns = ", ".join(_quote_identifier(column, dialect) for column in _json_object(config.get("fieldMap")).values())
     if not columns:
         raise ValueError("运行字段映射不能为空")
     context = RuntimeContext("publish-check", api, {}, {}, 0, "management", 0, 0)
     with measurement_connection(context) as current, current.cursor() as cursor:
-        cursor.execute(f"SELECT {columns} FROM {table_name} LIMIT 0")
+        if query_sql:
+            defaults = _json_object(config.get("defaultParams") or config.get("default_params"))
+            parameters = {name: defaults.get(name) for name in query_parameters}
+            cursor.execute(
+                f"SELECT * FROM ({parameterize_custom_query_sql(query_sql)}) AS api_query LIMIT 0",
+                parameters,
+            )
+            returned_columns = {
+                str(item.name if hasattr(item, "name") else item[0]).lower()
+                for item in cursor.description or []
+            }
+            expected_columns = {str(item).lower() for item in _json_object(config.get("fieldMap")).values()}
+            missing_columns = sorted(expected_columns - returned_columns)
+            if missing_columns:
+                raise ValueError(f"自定义 SQL 未返回已定义字段：{', '.join(missing_columns)}")
+        else:
+            cursor.execute(f"SELECT {columns} FROM {table_name} LIMIT 0")
+
+
+def preview_resource_latest_rows(resource_id: int, limit: int = 10) -> dict[str, Any]:
+    resource = fetch_one(
+        "SELECT * FROM eco_data_resources WHERE id=%(id)s LIMIT 1",
+        {"id": resource_id},
+    )
+    if not resource:
+        raise LookupError("数据资源不存在")
+    source_id = resource.get("data_source_id")
+    if not source_id:
+        raise ValueError("数据资源尚未关联数据源")
+    source = fetch_one(
+        "SELECT * FROM security_data_sources WHERE id=%(id)s LIMIT 1",
+        {"id": source_id},
+    )
+    if not source or source.get("connection_status") != "connected":
+        raise ValueError("关联数据源尚未通过连接检查")
+
+    dialect = str(_json_object(source.get("connection_options_json")).get("dialect") or "postgresql").lower()
+    if dialect not in {"postgresql", "mysql"}:
+        raise ValueError("物理表预览仅支持 PostgreSQL 或 MySQL 数据源")
+    table_name = _resource_table(resource)
+    if not table_name:
+        raise ValueError("数据资源尚未维护基准物理表")
+    quoted_table = _quote_identifier(table_name, dialect)
+    fields = fetch_all(
+        """
+        SELECT field_code, field_name, data_type
+        FROM eco_resource_security_fields
+        WHERE resource_id=%(resource_id)s
+        ORDER BY seq ASC NULLS LAST, id ASC
+        """,
+        {"resource_id": resource_id},
+    )
+    columns = [str(field.get("field_code") or "").strip() for field in fields]
+    columns = list(dict.fromkeys(column for column in columns if column))
+    if not columns:
+        raise ValueError("数据资源尚未维护字段，无法预览物理表")
+    quoted_columns = [_quote_identifier(column, dialect) for column in columns]
+
+    stat_base = _json_object(resource.get("stat_base"))
+    configured_time_field = str(
+        stat_base.get("business_time_field")
+        or stat_base.get("businessTimeField")
+        or stat_base.get("fresh_field_name")
+        or stat_base.get("freshFieldName")
+        or ""
+    ).strip()
+    column_lookup = {column.upper(): column for column in columns}
+    order_field = column_lookup.get(configured_time_field.upper(), "") if configured_time_field else ""
+    if not order_field:
+        order_field = next(
+            (column for column in columns if any(marker in column.upper() for marker in ("TIME", "DATE", "TIMESTAMP"))),
+            "",
+        )
+
+    safe_limit = min(max(int(limit), 1), 10)
+    order_clause = f" ORDER BY {_quote_identifier(order_field, dialect)} DESC" if order_field else ""
+    statement = f"SELECT {', '.join(quoted_columns)} FROM {quoted_table}{order_clause} LIMIT %(preview_limit)s"
+    context = RuntimeContext(
+        request_id=f"resource-preview-{uuid4()}",
+        api={"resource_id": resource_id, "data_source_id": int(source_id)},
+        subject={},
+        policy={},
+        risk_score=0,
+        client_ip="management",
+        query_days=0,
+        requested_rows=safe_limit,
+    )
+    with measurement_connection(context) as current, current.cursor() as cursor:
+        cursor.execute(statement, {"preview_limit": safe_limit})
+        candidate_rows = [dict(row) for row in cursor.fetchall()]
+
+    security_config = _json_object(source.get("security_config_json"))
+    validation_rules = _json_object(source.get("validation_rules_json"))
+
+    def config_enabled(camel_name: str, snake_name: str) -> bool:
+        value = security_config.get(camel_name) if camel_name in security_config else security_config.get(snake_name, False)
+        return value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    sampling_enabled = config_enabled("samplingEnabled", "sampling_enabled")
+    try:
+        sampling_rate = float(
+            security_config.get("samplingRate")
+            or security_config.get("sampling_rate")
+            or 100
+        )
+    except (TypeError, ValueError):
+        sampling_rate = 100
+    sampling_rate = min(max(sampling_rate, 1), 100)
+
+    sample_size = math.ceil(len(candidate_rows) * sampling_rate / 100) if sampling_enabled else 0
+    if sample_size >= len(candidate_rows):
+        sampled_rows = candidate_rows
+    elif sample_size > 0:
+        sampled_indexes = [math.floor(index * len(candidate_rows) / sample_size) for index in range(sample_size)]
+        sampled_rows = [candidate_rows[index] for index in sampled_indexes]
+    else:
+        sampled_rows = []
+
+    required_fields = [str(item).strip() for item in _json_list(validation_rules.get("required")) if str(item).strip()]
+    duplicate_keys = [
+        str(item).strip()
+        for item in _json_list(validation_rules.get("duplicateKeys") or validation_rules.get("duplicate_keys"))
+        if str(item).strip()
+    ]
+    numeric_ranges = _json_object(validation_rules.get("numericRanges") or validation_rules.get("numeric_ranges"))
+
+    def row_lookup(row: dict[str, Any]) -> dict[str, Any]:
+        return {str(key).strip().upper(): value for key, value in row.items()}
+
+    issues_by_row: list[list[str]] = [[] for _ in sampled_rows]
+    duplicate_groups: dict[tuple[Any, ...], list[int]] = {}
+    for row_index, row in enumerate(sampled_rows):
+        lookup = row_lookup(row)
+        for field_name in required_fields:
+            value = lookup.get(field_name.upper())
+            if value is None or (isinstance(value, str) and not value.strip()):
+                issues_by_row[row_index].append(f"必填字段 {field_name} 为空或不存在")
+        for field_name, configured_range in numeric_ranges.items():
+            range_values = _json_list(configured_range)
+            value = lookup.get(str(field_name).upper())
+            if value in {None, ""} or len(range_values) < 2:
+                continue
+            try:
+                numeric_value = float(value)
+                minimum, maximum = float(range_values[0]), float(range_values[1])
+                if numeric_value < minimum or numeric_value > maximum:
+                    issues_by_row[row_index].append(f"{field_name} 超出范围 [{minimum:g}, {maximum:g}]")
+            except (TypeError, ValueError):
+                issues_by_row[row_index].append(f"{field_name} 不是有效数值")
+        if duplicate_keys:
+            duplicate_value = tuple(lookup.get(field_name.upper()) for field_name in duplicate_keys)
+            if all(value is not None and value != "" for value in duplicate_value):
+                duplicate_groups.setdefault(duplicate_value, []).append(row_index)
+
+    for duplicate_indexes in duplicate_groups.values():
+        if len(duplicate_indexes) <= 1:
+            continue
+        for row_index in duplicate_indexes:
+            issues_by_row[row_index].append(f"重复键 {', '.join(duplicate_keys)} 在本次样本中重复")
+
+    validation_results = [
+        {"passed": not issues, "issues": issues}
+        for issues in issues_by_row
+    ]
+    passed_count = sum(1 for result in validation_results if result["passed"])
+    rejected_count = len(validation_results) - passed_count
+
+    return {
+        "resourceId": resource_id,
+        "tableName": table_name,
+        "orderField": order_field,
+        "limit": safe_limit,
+        "candidateCount": len(candidate_rows),
+        "sampleCount": len(sampled_rows),
+        "passedCount": passed_count,
+        "rejectedCount": rejected_count,
+        "samplingEnabled": sampling_enabled,
+        "samplingRate": sampling_rate,
+        "integrityEnabled": config_enabled("integrityEnabled", "integrity_enabled"),
+        "checksumAlgorithm": str(
+            security_config.get("checksumAlgorithm")
+            or security_config.get("checksum_algorithm")
+            or ""
+        ),
+        "validationRule": {
+            "requiredFields": required_fields,
+            "numericRanges": numeric_ranges,
+            "duplicateKeys": duplicate_keys,
+        },
+        "columns": [
+            {
+                "code": str(field.get("field_code") or ""),
+                "name": str(field.get("field_name") or field.get("field_code") or ""),
+                "dataType": str(field.get("data_type") or ""),
+            }
+            for field in fields
+            if str(field.get("field_code") or "").strip() in columns
+        ],
+        "rows": [
+            {str(key): _json_value(value) for key, value in row.items()}
+            for row in sampled_rows
+        ],
+        "validationResults": validation_results,
+    }
 
 
 def load_api(path: str, method: str) -> dict[str, Any] | None:
@@ -368,7 +626,9 @@ def load_subject(access_key: str) -> dict[str, Any] | None:
 def load_subject_by_api_key(api_key: str) -> dict[str, Any] | None:
     if len(api_key) < 32:
         return None
-    for subject in fetch_all("SELECT * FROM security_access_subjects WHERE subject_status = 'enabled'"):
+    # 先识别凭据归属，再由 authorize 判断主体状态。若只扫描启用主体，
+    # 合法密钥在主体停用后会被误报为 API_KEY_INVALID。
+    for subject in fetch_all("SELECT * FROM security_access_subjects"):
         expected = settings.subject_secrets.get(str(subject.get("credential_ref") or ""), "")
         if api_key_matches(expected, api_key):
             return subject
@@ -510,17 +770,23 @@ def authorize(request, body: bytes) -> RuntimeContext:
             client_ip=address,
         )
 
-    start_at = _parse_time(request.query_params.get("startAt"))
-    end_at = _parse_time(request.query_params.get("endAt"))
+    api_default_params = _json_object(_json_object(api.get("runtime_config_json")).get("defaultParams"))
+
+    def effective_param(name: str):
+        requested = request.query_params.get(name)
+        return requested if requested not in {None, ""} else api_default_params.get(name)
+
+    start_at = _parse_time(str(effective_param("startAt") or ""))
+    end_at = _parse_time(str(effective_param("endAt") or ""))
     if start_at and end_at and end_at > start_at:
         query_days = (end_at - start_at).total_seconds() / 86400
     else:
         query_days = 0
     requested_rows = max(
         [
-            int(request.query_params.get(name) or 0)
+            int(effective_param(name) or 0)
             for name in ("pageSize", "limit", "maxRows")
-            if str(request.query_params.get(name) or "0").isdigit()
+            if str(effective_param(name) or "0").isdigit()
         ]
         or [0]
     )
@@ -539,10 +805,11 @@ def authorize(request, body: bytes) -> RuntimeContext:
             client_ip=address,
             query_days=query_days,
             requested_rows=requested_rows,
+            risk_score=risk_points,
         )
 
-    region = request.query_params.get("regionCode")
-    organization = request.query_params.get("organizationCode")
+    region = effective_param("regionCode")
+    organization = effective_param("organizationCode")
     scope_violation = bool(
         region and _json_list(policy.get("region_scope_json"))
         and region not in _json_list(policy.get("region_scope_json"))
@@ -556,10 +823,11 @@ def authorize(request, body: bytes) -> RuntimeContext:
         raise RuntimeDenied(
             "SCOPE_VIOLATION", request_id=request_id, api=api, subject=subject, policy=policy,
             client_ip=address, query_days=query_days, requested_rows=requested_rows,
+            risk_score=risk_points,
         )
-    fields = request.query_params.get("fields")
+    fields = effective_param("fields")
     if fields:
-        requested_fields = [item.strip() for item in fields.split(",") if item.strip()]
+        requested_fields = [item.strip() for item in str(fields).split(",") if item.strip()]
         runtime_field_map = _json_object(_json_object(api.get("runtime_config_json")).get("fieldMap"))
         if runtime_field_map:
             known_codes = {str(code).upper() for code in runtime_field_map}
@@ -583,6 +851,7 @@ def authorize(request, body: bytes) -> RuntimeContext:
         raise RuntimeDenied(
             "RATE_LIMITED", request_id=request_id, api=api, subject=subject, policy=policy,
             client_ip=address, query_days=query_days, requested_rows=requested_rows,
+            risk_score=risk_points,
         )
     allowed_time_ranges = _json_list(policy.get("allowed_time_ranges_json"))
     should_deny, risk_points = violation_risk(
@@ -595,6 +864,7 @@ def authorize(request, body: bytes) -> RuntimeContext:
         raise RuntimeDenied(
             "OFF_HOURS", request_id=request_id, api=api, subject=subject, policy=policy,
             client_ip=address, query_days=query_days, requested_rows=requested_rows,
+            risk_score=risk_points,
         )
     should_deny, risk_points = violation_risk(
         policy, "rowLimitExceeded", requested_rows > int(policy.get("max_rows") or 1000)
@@ -604,21 +874,32 @@ def authorize(request, body: bytes) -> RuntimeContext:
         raise RuntimeDenied(
             "ROW_LIMIT_EXCEEDED", request_id=request_id, api=api, subject=subject, policy=policy,
             client_ip=address, query_days=query_days, requested_rows=requested_rows,
+            risk_score=risk_points,
         )
     behavior_rule = abnormal_access_rule(policy, "behaviorAnomaly")
     baseline = policy if policy.get("frequency_avg") is not None else None
-    score = calculate_risk(
+    behavior_score = calculate_risk(
         now=datetime.now().astimezone(),
-        allowed_time_ranges=allowed_time_ranges if abnormal_access_rule(policy, "offHours")["action"] == "risk" else [],
+        allowed_time_ranges=[],
         frequency=frequency,
         query_days=query_days,
         requested_rows=requested_rows,
-        max_rows=int(policy.get("max_rows") or 1000) if abnormal_access_rule(policy, "rowLimitExceeded")["action"] == "risk" else 2**31,
-        baseline=baseline if behavior_rule["enabled"] and behavior_rule["action"] == "risk" else None,
+        max_rows=2**31,
+        baseline=baseline if behavior_rule["enabled"] else None,
     )
-    score = min(100, score + extra_risk)
+    should_deny, risk_points = violation_risk(
+        policy, "behaviorAnomaly", behavior_score > 0
+    )
+    extra_risk += risk_points
+    if should_deny:
+        raise RuntimeDenied(
+            "RISK_REJECTED", request_id=request_id, api=api, subject=subject, policy=policy,
+            client_ip=address, query_days=query_days, requested_rows=requested_rows,
+            risk_score=risk_points,
+        )
+    score = min(100, extra_risk)
     threshold = int(policy.get("risk_threshold") or 70)
-    if score >= threshold or score >= 70:
+    if score >= threshold:
         raise RuntimeDenied(
             "RISK_REJECTED", request_id=request_id, api=api, subject=subject, policy=policy,
             client_ip=address, query_days=query_days, requested_rows=requested_rows, risk_score=score,
@@ -751,6 +1032,7 @@ def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]
         f"{_quote_identifier(field_map[code], dialect)} AS {_quote_identifier(_camel_case(code.lower()), dialect)}"
         for code in selected_codes
     )
+    query_sql, query_parameters = validate_custom_query_sql(config.get("querySql") or config.get("query_sql"))
     conditions: list[str] = []
     parameters: dict[str, Any] = {}
     time_code = str(config.get("timeFieldCode") or config.get("time_field_code") or "").upper()
@@ -759,11 +1041,14 @@ def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]
     start_at = _parse_time(str(params.get("startAt") or ""))
     end_at = _parse_time(str(params.get("endAt") or ""))
     if time_code:
-        if time_code not in field_map or not start_at or not end_at or end_at <= start_at:
+        if time_code not in field_map:
             raise ValueError("VALIDATION_ERROR")
-        time_column = _quote_identifier(field_map[time_code], dialect)
-        conditions.extend([f"{time_column} >= %(start_at)s", f"{time_column} < %(end_at)s"])
-        parameters.update({"start_at": start_at, "end_at": end_at})
+        if start_at or end_at:
+            if not start_at or not end_at or end_at <= start_at:
+                raise ValueError("VALIDATION_ERROR")
+            time_column = _quote_identifier(field_map[time_code], dialect)
+            conditions.extend([f"{time_column} >= %(start_at)s", f"{time_column} < %(end_at)s"])
+            parameters.update({"start_at": start_at, "end_at": end_at})
     region = str(params.get("regionCode") or "").strip()
     if region and region_code:
         if region_code not in field_map:
@@ -779,6 +1064,41 @@ def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]
 
     page = max(1, int(params.get("page") or 1))
     page_size = min(max(1, int(params.get("pageSize") or 100)), int(context.policy.get("max_rows") or 1000), 1000)
+    if query_sql:
+        default_params = _json_object(config.get("defaultParams") or config.get("default_params"))
+        parameters = {
+            name: params.get(name) if params.get(name) not in {None, ""} else default_params.get(name)
+            for name in query_parameters
+        }
+        missing_params = [name for name, value in parameters.items() if value is None]
+        if missing_params:
+            raise ValueError(f"API 缺少查询参数：{', '.join(missing_params)}")
+        parameters.update({"__api_limit": page_size, "__api_offset": (page - 1) * page_size})
+        statement = (
+            f"SELECT * FROM ({parameterize_custom_query_sql(query_sql)}) AS api_query "
+            "LIMIT %(__api_limit)s OFFSET %(__api_offset)s"
+        )
+        with measurement_connection(context) as current, current.cursor() as cursor:
+            cursor.execute(statement, parameters)
+            raw_rows = cursor.fetchall()
+        mask_codes = {str(item).upper() for item in _json_list(config.get("maskFields") or config.get("mask_fields"))}
+        rows = []
+        for raw in raw_rows:
+            source_row = dict(raw)
+            source_lookup = {str(key).lower(): value for key, value in source_row.items()}
+            row = {
+                _camel_case(code.lower()): source_lookup.get(str(field_map[code]).lower())
+                for code in selected_codes
+            }
+            if context.output_mode == "masked":
+                for code in mask_codes:
+                    key = _camel_case(code.lower())
+                    if row.get(key) not in {None, ""}:
+                        text = str(row[key])
+                        row[key] = f"{text[:3]}***{text[-2:]}" if len(text) > 5 else "***"
+            rows.append({key: _json_value(value) for key, value in row.items()})
+        return rows, {"page": page, "pageSize": page_size, "returnedRows": len(rows)}
+
     parameters.update({"limit": page_size, "offset": (page - 1) * page_size})
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
     order_clause = f" ORDER BY {_quote_identifier(field_map[time_code], dialect)}" if time_code else ""
@@ -1082,6 +1402,114 @@ def runtime_summary() -> dict[str, Any]:
     return {key: int(value or 0) for key, value in row.items()}
 
 
+def ensure_behavior_baseline_unique_index() -> None:
+    duplicate = fetch_one(
+        """
+        SELECT subject_id, api_resource_id, count(*) AS duplicate_count
+        FROM security_behavior_baselines
+        GROUP BY subject_id, api_resource_id
+        HAVING count(*) > 1
+        LIMIT 1
+        """
+    )
+    if duplicate:
+        raise ValueError("存在重复的主体 + API 行为基线，请先合并历史数据")
+    execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS security_behavior_baselines_subject_api_unique
+        ON security_behavior_baselines (subject_id, api_resource_id)
+        """
+    )
+
+
+def upsert_behavior_baseline(subject_id: int, api_id: int, values: dict[str, Any]) -> dict[str, Any]:
+    ensure_behavior_baseline_unique_index()
+    subject = fetch_one(
+        "SELECT id, subject_code FROM security_access_subjects WHERE id=%(id)s LIMIT 1",
+        {"id": subject_id},
+    )
+    api = fetch_one(
+        "SELECT id, api_code FROM security_api_resources WHERE id=%(id)s LIMIT 1",
+        {"id": api_id},
+    )
+    if not subject or not api:
+        raise LookupError("访问主体或 API 不存在")
+
+    def non_negative_number(name: str) -> float:
+        value = values.get(name, 0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) < 0:
+            raise ValueError(f"{name} 必须是大于等于 0 的数值")
+        return float(value)
+
+    def required_time(name: str) -> datetime:
+        value = str(values.get(name) or "").strip().replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError(f"{name} 格式不正确") from error
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    sample_from = required_time("sample_from")
+    sample_to = required_time("sample_to")
+    if sample_to <= sample_from:
+        raise ValueError("样本结束时间必须晚于开始时间")
+    sample_count = values.get("sample_count", 0)
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count < 0:
+        raise ValueError("sample_count 必须是大于等于 0 的整数")
+    baseline_status = str(values.get("baseline_status") or "draft")
+    if baseline_status not in {"draft", "enabled", "disabled"}:
+        raise ValueError("行为基线状态不正确")
+
+    now = datetime.now(timezone.utc)
+    subject_token = re.sub(r"[^A-Za-z0-9_-]+", "-", str(subject["subject_code"])).strip("-")
+    api_token = re.sub(r"[^A-Za-z0-9_-]+", "-", str(api["api_code"])).strip("-")
+    baseline_code = f"BASE-{subject_token}-{api_token}"[:200]
+    row = fetch_one(
+        """
+        INSERT INTO security_behavior_baselines (
+          baseline_code, subject_id, api_resource_id, sample_from, sample_to,
+          sample_count, frequency_avg, frequency_stddev, query_days_avg,
+          query_days_stddev, rows_avg, rows_stddev, normal_time_ranges_json,
+          failure_avg, baseline_version, baseline_status, generated_at,
+          "createdAt", "updatedAt"
+        ) VALUES (
+          %(baseline_code)s, %(subject_id)s, %(api_id)s, %(sample_from)s, %(sample_to)s,
+          %(sample_count)s, %(frequency_avg)s, %(frequency_stddev)s, %(query_days_avg)s,
+          %(query_days_stddev)s, %(rows_avg)s, %(rows_stddev)s, '[]'::jsonb,
+          %(failure_avg)s, 1, %(baseline_status)s, %(now)s, %(now)s, %(now)s
+        )
+        ON CONFLICT (subject_id, api_resource_id) DO UPDATE SET
+          sample_from=EXCLUDED.sample_from, sample_to=EXCLUDED.sample_to,
+          sample_count=EXCLUDED.sample_count, frequency_avg=EXCLUDED.frequency_avg,
+          frequency_stddev=EXCLUDED.frequency_stddev, query_days_avg=EXCLUDED.query_days_avg,
+          query_days_stddev=EXCLUDED.query_days_stddev, rows_avg=EXCLUDED.rows_avg,
+          rows_stddev=EXCLUDED.rows_stddev, failure_avg=EXCLUDED.failure_avg,
+          baseline_version=security_behavior_baselines.baseline_version + 1,
+          baseline_status=EXCLUDED.baseline_status, generated_at=EXCLUDED.generated_at,
+          "updatedAt"=EXCLUDED."updatedAt"
+        RETURNING id, baseline_code, baseline_version, baseline_status, generated_at
+        """,
+        {
+            "baseline_code": baseline_code,
+            "subject_id": subject_id,
+            "api_id": api_id,
+            "sample_from": sample_from,
+            "sample_to": sample_to,
+            "sample_count": sample_count,
+            "frequency_avg": non_negative_number("frequency_avg"),
+            "frequency_stddev": non_negative_number("frequency_stddev"),
+            "query_days_avg": non_negative_number("query_days_avg"),
+            "query_days_stddev": non_negative_number("query_days_stddev"),
+            "rows_avg": non_negative_number("rows_avg"),
+            "rows_stddev": non_negative_number("rows_stddev"),
+            "failure_avg": non_negative_number("failure_avg"),
+            "baseline_status": baseline_status,
+            "now": now,
+        },
+    )
+    return row or {}
+
+
 def validate_api(api: dict[str, Any]) -> list[str]:
     errors = []
     if not str(api.get("gateway_path") or "").startswith("/data-api/"):
@@ -1150,6 +1578,101 @@ def publish_api(api_id: int) -> dict[str, Any]:
     return {"id": api_id, "publishStatus": "success", "publishVersion": version, "publishedAt": now.isoformat()}
 
 
+def ensure_resource_api(resource_id: int) -> dict[str, Any]:
+    resource = fetch_one("SELECT * FROM eco_data_resources WHERE id=%(id)s", {"id": resource_id})
+    if not resource:
+        raise LookupError("数据资源不存在")
+    resource_code = str(resource.get("resource_code") or "").strip()
+    resource_name = str(resource.get("resource_name") or "").strip()
+    if not resource_code or not resource_name or not resource.get("data_source_id"):
+        raise ValueError("请先完整维护资源编码、名称和数据源")
+    token = re.sub(r"[^A-Za-z0-9_-]+", "-", resource_code).strip("-") or f"resource-{resource_id}"
+    existing = fetch_one(
+        "SELECT * FROM security_api_resources WHERE resource_id=%(resource_id)s ORDER BY id ASC LIMIT 1",
+        {"resource_id": resource_id},
+    )
+    draft_api = {
+        **(existing or {}),
+        "resource_id": resource_id,
+        "data_source_id": resource.get("data_source_id"),
+        "runtime_config_json": {},
+    }
+    runtime_config, source_id = build_resource_runtime_config(draft_api)
+    desired = {
+        "api_code": f"API-{token}",
+        "api_name": f"{resource_name}查询 API",
+        "gateway_path": f"/data-api/resources/{token.lower()}",
+        "data_source_id": source_id,
+        "runtime_config_json": runtime_config,
+    }
+    now = datetime.now(timezone.utc)
+    if not existing:
+        row = fetch_one(
+            """
+            INSERT INTO security_api_resources (
+              api_code, api_name, access_mode, http_method, upstream_url, orchestrator_path,
+              gateway_path, protection_level, supports_row_filter, supports_field_filter,
+              supports_aggregate, supports_homomorphic, api_status, publish_version,
+              publish_status, publish_error, resource_id, data_source_id, runtime_config_json,
+              "createdAt", "updatedAt"
+            ) VALUES (
+              %(api_code)s, %(api_name)s, 'develop', 'GET', NULL, '/internal/resource-query',
+              %(gateway_path)s, 'l2', true, true, false, false, 'draft', 0,
+              'unpublished', NULL, %(resource_id)s, %(data_source_id)s, %(runtime_config)s::jsonb,
+              %(now)s, %(now)s
+            ) RETURNING *
+            """,
+            {
+                **desired,
+                "resource_id": resource_id,
+                "runtime_config": json.dumps(runtime_config, ensure_ascii=False),
+                "now": now,
+            },
+        ) or {}
+        return {"id": int(row["id"]), "created": True, "publishStatus": row.get("publish_status")}
+
+    config_changed = _json_object(existing.get("runtime_config_json")) != runtime_config
+    identity_changed = any(str(existing.get(key) or "") != str(desired[key]) for key in ("api_code", "api_name", "gateway_path", "data_source_id"))
+    if config_changed or identity_changed:
+        fetch_one(
+            """
+            UPDATE security_api_resources
+            SET api_code=%(api_code)s, api_name=%(api_name)s, access_mode='develop', http_method='GET',
+                upstream_url=NULL, orchestrator_path='/internal/resource-query', gateway_path=%(gateway_path)s,
+                data_source_id=%(data_source_id)s, runtime_config_json=%(runtime_config)s::jsonb,
+                api_status='draft', publish_status='unpublished', publish_error=NULL, "updatedAt"=%(now)s
+            WHERE id=%(id)s
+            RETURNING *
+            """,
+            {
+                **desired,
+                "id": existing["id"],
+                "runtime_config": json.dumps(runtime_config, ensure_ascii=False),
+                "now": now,
+            },
+        )
+    return {
+        "id": int(existing["id"]),
+        "created": False,
+        "publishStatus": "unpublished" if config_changed or identity_changed else existing.get("publish_status"),
+    }
+
+
+def unpublish_api(api_id: int) -> dict[str, Any]:
+    row = fetch_one(
+        """
+        UPDATE security_api_resources
+        SET api_status='disabled', publish_status='unpublished', publish_error=NULL, "updatedAt"=%(now)s
+        WHERE id=%(id)s
+        RETURNING id
+        """,
+        {"id": api_id, "now": datetime.now(timezone.utc)},
+    )
+    if not row:
+        raise LookupError("API 资源不存在")
+    return {"id": api_id, "publishStatus": "unpublished", "apiStatus": "disabled"}
+
+
 def publish_policy(policy_id: int) -> dict[str, Any]:
     policy = fetch_one(
         """
@@ -1192,11 +1715,22 @@ def publish_policy(policy_id: int) -> dict[str, Any]:
     rules = _json_object(policy.get("abnormal_access_rules_json"))
     for rule_name in DEFAULT_ABNORMAL_ACCESS_RULES:
         rule = rules.get(rule_name)
-        if rule is not None and (
-            not isinstance(rule, dict)
-            or str(rule.get("action") or "") not in {"deny", "risk", "allow"}
-        ):
+        if rule is None:
+            continue
+        if not isinstance(rule, dict) or str(rule.get("action") or "") not in {"deny", "risk", "allow"}:
             errors.append(f"异常访问规则 {rule_name} 的 action 必须是 deny、risk 或 allow")
+            continue
+        if "enabled" in rule and not isinstance(rule.get("enabled"), bool):
+            errors.append(f"异常访问规则 {rule_name} 的 enabled 必须是布尔值")
+        if "riskScore" in rule:
+            risk_score = rule.get("riskScore")
+            if (
+                isinstance(risk_score, bool)
+                or not isinstance(risk_score, (int, float))
+                or not math.isfinite(float(risk_score))
+                or not 0 <= float(risk_score) <= 100
+            ):
+                errors.append(f"异常访问规则 {rule_name} 的 riskScore 必须在 0 到 100 之间")
     now = datetime.now(timezone.utc)
     if errors:
         execute(
