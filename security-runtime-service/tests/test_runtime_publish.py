@@ -338,3 +338,153 @@ def test_publish_policy_rejects_invalid_rule_risk_score(risk_score):
     with patch("app.runtime.fetch_one", return_value=policy), patch("app.runtime.execute"):
         with pytest.raises(ValueError, match="riskScore 必须在 0 到 100 之间"):
             publish_policy(12)
+
+
+def test_publish_policy_freezes_resource_and_field_labels_in_runtime_snapshot():
+    policy = {
+        "id": 12,
+        "resource_id": 8,
+        "policy_code": "POL-12",
+        "scenario": "resource-data-query",
+        "subject_id": 2,
+        "api_resource_id": 9,
+        "output_mode": "masked",
+        "subject_status": "enabled",
+        "api_status": "enabled",
+        "api_publish_status": "success",
+        "api_code": "API-RESOURCE-9",
+        "allowed_api_codes_json": ["API-RESOURCE-9"],
+        "max_requests_per_minute": 60,
+        "max_query_days": 1,
+        "max_rows": 1000,
+        "risk_threshold": 70,
+        "policy_version": 2,
+        "policy_detail_json": {"owner": "security-team"},
+    }
+    resource = {
+        "id": 8,
+        "protection_level": "l2",
+        "tags": ["页面标签"],
+        "resource_tags": ["量测数据", "敏感"],
+    }
+    profile = {
+        "security_tags": ["需审批"],
+        "important_data_flag": True,
+        "desensitization_required": True,
+        "export_allowed": False,
+    }
+    fields = [{
+        "field_code": "POINT_ID",
+        "security_level": "important",
+        "field_tags": ["直接标识符"],
+        "required_desensitization": True,
+        "important_field_flag": True,
+    }]
+    with patch("app.runtime.fetch_one", side_effect=[policy, resource, profile]), \
+         patch("app.runtime.fetch_all", return_value=fields), \
+         patch("app.runtime.execute") as execute:
+        result = publish_policy(12)
+
+    assert result["policyVersion"] == 3
+    assert "重要数据" in result["matchedLabels"]
+    assert "页面标签" in result["matchedLabels"]
+    assert "量测数据" in result["matchedLabels"]
+    update_parameters = execute.call_args.args[1]
+    detail = json.loads(update_parameters["policy_detail"])
+    assert detail["owner"] == "security-team"
+    snapshot = detail["runtimeSnapshot"]
+    assert snapshot["sensitivity"] == "important"
+    assert snapshot["riskMultiplier"] == 1.5
+    assert snapshot["hardConstraints"]["maskedFields"] == ["POINT_ID"]
+    assert snapshot["hardConstraints"]["exportForbidden"] is True
+    assert snapshot["identifierFields"] == ["POINT_ID"]
+
+
+def test_publish_policy_rejects_output_mode_that_conflicts_with_protection_label():
+    policy = {
+        "id": 12,
+        "resource_id": 8,
+        "policy_code": "POL-12",
+        "scenario": "resource-data-query",
+        "subject_id": 2,
+        "api_resource_id": 9,
+        "output_mode": "detail",
+        "subject_status": "enabled",
+        "api_status": "enabled",
+        "api_publish_status": "success",
+        "api_code": "API-RESOURCE-9",
+        "allowed_api_codes_json": ["API-RESOURCE-9"],
+        "max_requests_per_minute": 60,
+        "max_query_days": 1,
+        "max_rows": 1000,
+        "risk_threshold": 70,
+    }
+    resource = {"id": 8, "protection_level": "l3", "resource_tags": []}
+    with patch("app.runtime.fetch_one", side_effect=[policy, resource, {}]), \
+         patch("app.runtime.fetch_all", return_value=[]), \
+         patch("app.runtime.execute") as execute:
+        with pytest.raises(ValueError, match="仅输出密态"):
+            publish_policy(12)
+
+    assert "publish_status='failed'" in execute.call_args.args[0]
+
+
+def test_publish_label_group_policy_without_resource_or_api():
+    policy = {
+        "id": 30,
+        "access_scope": "label_group",
+        "policy_code": "POL-IMPORTANT-L2",
+        "scenario": "resource-data-query",
+        "subject_id": 2,
+        "api_resource_id": None,
+        "resource_id": None,
+        "output_mode": "masked",
+        "subject_status": "enabled",
+        "allowed_api_codes_json": ["*"],
+        "security_tags": ["重要数据"],
+        "security_profile_json": {
+            "match": "all",
+            "priority": 200,
+            "protectionLevels": ["l2"],
+            "fieldTags": ["需脱敏"],
+        },
+        "max_requests_per_minute": 30,
+        "max_query_days": 1,
+        "max_rows": 500,
+        "risk_threshold": 60,
+        "policy_version": 0,
+    }
+    with patch("app.runtime.fetch_one", return_value=policy), \
+         patch("app.runtime.execute") as execute:
+        result = publish_policy(30)
+
+    assert result["publishStatus"] == "success"
+    parameters = execute.call_args.args[1]
+    snapshot = json.loads(parameters["policy_detail"])["runtimeSnapshot"]
+    assert snapshot["scope"] == "label_group"
+    assert snapshot["selector"]["resourceTags"] == ["重要数据"]
+    assert snapshot["selector"]["protectionLevels"] == ["l2"]
+    assert snapshot["selector"]["fieldTags"] == ["需脱敏"]
+
+
+def test_publish_label_group_policy_requires_at_least_one_selector():
+    policy = {
+        "id": 30,
+        "access_scope": "label_group",
+        "policy_code": "POL-EMPTY-GROUP",
+        "scenario": "resource-data-query",
+        "subject_id": 2,
+        "output_mode": "detail",
+        "subject_status": "enabled",
+        "allowed_api_codes_json": ["*"],
+        "max_requests_per_minute": 30,
+        "max_query_days": 1,
+        "max_rows": 500,
+        "risk_threshold": 60,
+    }
+    with patch("app.runtime.fetch_one", return_value=policy), \
+         patch("app.runtime.execute") as execute:
+        with pytest.raises(ValueError, match="至少需要一个"):
+            publish_policy(30)
+
+    assert "publish_status='failed'" in execute.call_args.args[0]

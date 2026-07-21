@@ -37,6 +37,61 @@ function formatRequestTime(value: unknown) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
+type DecisionRiskFactor = {
+  code: string
+  label: string
+  score: number
+  detail: string
+}
+
+function decisionEvidence(value: unknown) {
+  let source = value
+  if (typeof source === 'string') {
+    try { source = JSON.parse(source) } catch { source = {} }
+  }
+  const evidence = relationRecord(source)
+  const matchedLabels = Array.isArray(evidence.matchedLabels)
+    ? evidence.matchedLabels.map((item) => String(item || '').trim()).filter(Boolean)
+    : []
+  const riskFactors = Array.isArray(evidence.riskFactors)
+    ? evidence.riskFactors.map((item) => {
+        const factor = relationRecord(item)
+        return {
+          code: String(factor.code || ''),
+          label: String(factor.label || factor.code || '未命名风险因子'),
+          score: Number(factor.score || 0),
+          detail: String(factor.detail || ''),
+        }
+      }).filter((item): item is DecisionRiskFactor => Boolean(item.code || item.label))
+    : []
+  return { matchedLabels, riskFactors }
+}
+
+function DecisionEvidence({ value }: { value: unknown }) {
+  const evidence = decisionEvidence(value)
+  if (!evidence.matchedLabels.length && !evidence.riskFactors.length) {
+    return <span className="text-[var(--text-muted)]">-</span>
+  }
+  const factorSummary = evidence.riskFactors.map((factor) => `${factor.label} +${factor.score}：${factor.detail}`).join('\n')
+  return (
+    <div className="min-w-[220px] max-w-[320px] space-y-1.5" title={factorSummary || evidence.matchedLabels.join('、')}>
+      {evidence.matchedLabels.length ? (
+        <div className="flex flex-wrap gap-1">
+          {evidence.matchedLabels.slice(0, 3).map((label) => (
+            <span key={label} className="inline-flex rounded-full border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-2 py-0.5 text-[0.6875rem] text-[var(--status-info-text)]">{label}</span>
+          ))}
+          {evidence.matchedLabels.length > 3 ? <span className="text-[0.6875rem] text-[var(--text-muted)]">+{evidence.matchedLabels.length - 3}</span> : null}
+        </div>
+      ) : null}
+      {evidence.riskFactors.length ? (
+        <div className="line-clamp-2 text-[0.75rem] leading-5 text-[var(--text-secondary)]">
+          {evidence.riskFactors.map((factor) => `${factor.label} +${factor.score}`).join('；')}
+        </div>
+      ) : <div className="text-[0.75rem] text-[var(--text-muted)]">未命中动态风险因子</div>}
+    </div>
+  )
+}
+
 function ResourceAccessDecisionLogs({ resourceId }: { resourceId: string }) {
   const [logs, setLogs] = useState<SecurityV3Record[]>([])
   const [loading, setLoading] = useState(true)
@@ -77,8 +132,8 @@ function ResourceAccessDecisionLogs({ resourceId }: { resourceId: string }) {
       </div>
       {error ? <div className="m-4 rounded-[8px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-3 text-[0.8125rem] text-[var(--status-danger-text)]">{error}</div> : null}
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1100px] border-collapse text-left text-[0.8125rem]">
-          <thead className="bg-[var(--surface-muted)] text-[var(--text-muted)]"><tr>{['请求时间', '请求编号', '访问主体', 'API', '命中策略', '决策', '决策原因', '风险', '返回行数', '耗时'].map((label) => <th key={label} className="border-b border-[var(--line)] px-4 py-3 font-medium">{label}</th>)}</tr></thead>
+        <table className="w-full min-w-[1380px] border-collapse text-left text-[0.8125rem]">
+          <thead className="bg-[var(--surface-muted)] text-[var(--text-muted)]"><tr>{['请求时间', '请求编号', '访问主体', 'API', '命中策略', '决策', '决策原因', '风险依据', '风险', '返回行数', '耗时'].map((label) => <th key={label} className="border-b border-[var(--line)] px-4 py-3 font-medium">{label}</th>)}</tr></thead>
           <tbody>{logs.map((log) => (
             <tr key={String(log.id || log.request_id)} className="border-b border-[var(--line)] last:border-b-0 hover:bg-[var(--surface-muted)]">
               <td className="whitespace-nowrap px-4 py-3.5 text-[var(--text-secondary)]">{formatRequestTime(log.requested_at || log.createdAt)}</td>
@@ -88,6 +143,7 @@ function ResourceAccessDecisionLogs({ resourceId }: { resourceId: string }) {
               <td className="px-4 py-3.5 text-[var(--text-secondary)]">{formatSecurityV3Value(log.policy)}</td>
               <td className="px-4 py-3.5"><span className={cn('inline-flex rounded-full border px-2.5 py-1 text-[0.75rem]', decisionTone(log.decision_result))}>{formatSecurityV3Value(log.decision_result)}</span></td>
               <td className="max-w-[260px] px-4 py-3.5 text-[var(--text-secondary)]">{formatSecurityV3Value(log.decision_reason)}</td>
+              <td className="px-4 py-3.5"><DecisionEvidence value={log.applied_limits_json} /></td>
               <td className="whitespace-nowrap px-4 py-3.5 text-[var(--text-secondary)]">{formatSecurityV3Value(log.risk_level)} · {Number(log.risk_score || 0)}</td>
               <td className="px-4 py-3.5 text-[var(--text-secondary)]">{Number(log.returned_rows || 0).toLocaleString()}</td>
               <td className="whitespace-nowrap px-4 py-3.5 text-[var(--text-secondary)]">{log.duration_ms == null ? '-' : `${Number(log.duration_ms)} ms`}</td>

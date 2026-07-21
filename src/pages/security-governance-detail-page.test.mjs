@@ -114,6 +114,14 @@ test('安全管控详情页使用 tab 展示并将当前 tab 写入 URL', () => 
   assert.match(detailPageSource, /数据安全血缘关系/)
 })
 
+test('资源详情 tab 在亮色背景下保持可读对比度', () => {
+  assert.match(detailPageSource, /aria-label="数据资源详情导航"/)
+  assert.match(detailPageSource, /role="tablist"/)
+  assert.match(detailPageSource, /bg-\[color-mix\(in_srgb,var\(--surface-raised-strong\)_94%,transparent\)\]/)
+  assert.match(detailPageSource, /font-medium text-\[var\(--text-main\)\]/)
+  assert.match(detailPageSource, /aria-selected=\{activeTab === key\}/)
+})
+
 test('资源详情访问主体 tab 直接维护当前唯一 API 的主体授权', () => {
   assert.match(detailPageSource, /activeTab === 'accessSubjects'/)
   assert.match(detailPageSource, /<ResourceAccessSubjectsPanel resourceId=\{String\(item\.id\)\} canManage=\{canManageResources\}/)
@@ -187,6 +195,15 @@ test('新建数据资源可定义只读 SQL 和 API 默认参数', () => {
   assert.match(resourceEditSource, /default_params: queryDefaultParams/)
 })
 
+test('数据资源标签读写兼容运行时使用的资源标签字段', () => {
+  assert.match(resourceEditDialogSource, /资源标签/)
+  assert.match(resourceEditDialogSource, /用于分类分级与标签组合策略匹配/)
+  assert.match(resourceEditDialogSource, /splitTags\(tagsText\)\.length === 0/)
+  assert.match(resourceEditSource, /tags: normalizeTags\(raw\.resource_tags \?\? raw\.tags\)/)
+  assert.match(resourceEditSource, /tags: values\.tags/)
+  assert.match(resourceEditSource, /resource_tags: values\.tags/)
+})
+
 test('资源详情提供真实可执行的安全访问策略配置', () => {
   assert.match(detailPageSource, /<ResourceAccessPoliciesPanel/)
   assert.match(accessPoliciesPanelSource, /collection: 'eco_resource_security_policies'/)
@@ -200,6 +217,10 @@ test('资源详情提供真实可执行的安全访问策略配置', () => {
   assert.match(accessPoliciesPanelSource, /publishSecurityPolicy/)
   assert.match(accessPoliciesPanelSource, /listSecurityV3Records\('security_policy_decision_logs'/)
   assert.match(accessPoliciesPanelSource, /访问策略最近执行日志/)
+  assert.match(accessPoliciesPanelSource, /风险依据/)
+  assert.match(accessPoliciesPanelSource, /applied_limits_json/)
+  assert.match(accessPoliciesPanelSource, /matchedLabels/)
+  assert.match(accessPoliciesPanelSource, /riskFactors/)
   assert.match(accessPoliciesPanelSource, /formatRequestTime\(log\.requested_at \|\| log\.createdAt\)/)
   assert.match(accessPoliciesPanelSource, /new Date\(normalized\)/)
   assert.doesNotMatch(accessPoliciesPanelSource, /requested_at[^\n]*slice\(0, 19\)/)

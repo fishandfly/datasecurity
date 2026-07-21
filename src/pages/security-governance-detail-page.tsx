@@ -535,15 +535,21 @@ export function SecurityGovernanceDetailPage() {
   }
 
   const tabsNav = (
-    <div className="flex gap-4 overflow-x-auto border-b border-[var(--line)]">
+    <div
+      aria-label="数据资源详情导航"
+      className="flex gap-2 overflow-x-auto rounded-[18px] border border-[var(--surface-outline-strong)] bg-[color-mix(in_srgb,var(--surface-raised-strong)_94%,transparent)] px-2 pt-2 shadow-[var(--shadow-soft)] backdrop-blur-md"
+      role="tablist"
+    >
       {detailTabs.map(([key, label]) => (
         <button
           type="button"
           key={key}
+          aria-selected={activeTab === key}
+          role="tab"
           className={`relative -mb-px inline-flex min-h-12 shrink-0 items-center whitespace-nowrap rounded-t-[14px] border border-transparent px-4 pb-3 pt-3 text-[0.9375rem] ${
             activeTab === key
               ? 'z-10 -translate-y-[1px] border-[rgba(var(--theme-soft-rgb),0.24)] border-b-[var(--surface-raised-strong)] bg-[linear-gradient(180deg,var(--surface-raised-strong),color-mix(in_srgb,var(--primary-soft)_72%,var(--surface-raised)))] font-semibold text-[var(--primary)] shadow-[0_16px_32px_rgba(var(--theme-soft-rgb),0.14)]'
-              : 'text-[var(--text-secondary)] transition hover:-translate-y-[1px] hover:border-[var(--surface-outline)] hover:bg-[linear-gradient(180deg,var(--surface-raised),var(--surface-muted))] hover:text-[var(--primary)]'
+              : 'font-medium text-[var(--text-main)] transition hover:-translate-y-[1px] hover:border-[var(--surface-outline)] hover:bg-[linear-gradient(180deg,var(--surface-raised),var(--surface-muted))] hover:text-[var(--primary)]'
           }`}
           onClick={() => handleTabChange(key)}
         >

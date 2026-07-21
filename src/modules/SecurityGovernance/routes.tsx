@@ -6,6 +6,8 @@ const SecurityDataLabelsPage = lazy(async () => ({ default: (await import('../..
 const SecuritySourceConfigPage = lazy(async () => ({ default: (await import('../../pages/security-source-config-page')).SecuritySourceConfigPage }))
 const SecurityAccessRuleConfigPage = lazy(async () => ({ default: (await import('../../pages/security-access-rule-config-page')).SecurityAccessRuleConfigPage }))
 const SecurityHomomorphicLogsPage = lazy(async () => ({ default: (await import('../../pages/security-homomorphic-logs-page')).SecurityHomomorphicLogsPage }))
+const SecurityConfidentialComputingPage = lazy(async () => ({ default: (await import('../../pages/security-confidential-computing-page')).SecurityConfidentialComputingPage }))
+const SecurityHomomorphicResultsPage = lazy(async () => ({ default: (await import('../../pages/security-homomorphic-results-page')).SecurityHomomorphicResultsPage }))
 const SecurityGovernancePage = lazy(async () => ({ default: (await import('../../pages/security-governance-page')).SecurityGovernancePage }))
 const SecurityGovernanceDetailPage = lazy(async () => ({ default: (await import('../../pages/security-governance-detail-page')).SecurityGovernanceDetailPage }))
 const SecurityTagRulesPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityTagRulesPage }))
@@ -17,8 +19,6 @@ const SecurityPolicyPublishPage = lazy(async () => ({ default: (await import('..
 const SecurityDecisionAuditPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityDecisionAuditPage }))
 const SecurityRiskEventsPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityRiskEventsPage }))
 const SecurityCryptoKeysPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityCryptoKeysPage }))
-const SecurityHomomorphicTasksPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityHomomorphicTasksPage }))
-const SecurityHomomorphicResultsPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityHomomorphicResultsPage }))
 
 export function SecurityGovernanceRoutes() {
   return (
@@ -57,7 +57,7 @@ export function SecurityGovernanceRoutes() {
 
       <Route path="/security-governance/homomorphic" element={<Navigate to="/security-governance/homomorphic/tasks" replace />} />
       <Route path="/security-governance/homomorphic/keys" element={<SecurityCryptoKeysPage />} />
-      <Route path="/security-governance/homomorphic/tasks" element={<SecurityHomomorphicTasksPage />} />
+      <Route path="/security-governance/homomorphic/tasks" element={<SecurityConfidentialComputingPage />} />
       <Route path="/security-governance/homomorphic/results" element={<SecurityHomomorphicResultsPage />} />
       <Route path="/security-governance/homomorphic/logs" element={<SecurityHomomorphicLogsPage />} />
 

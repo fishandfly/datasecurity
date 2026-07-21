@@ -23,6 +23,7 @@ type RawEditableResource = {
   region_coverage?: string | null
   remarks?: string | null
   tags?: unknown
+  resource_tags?: unknown
   source_table?: string | null
   stat_base?: unknown
   access_url?: unknown
@@ -268,7 +269,7 @@ function mapEditableResource(raw: RawEditableResource): EditableResourceRecord {
     regionCategoryId: normalizeId(raw.region_category_id),
     regionCoverage: normalizeText(raw.region_coverage),
     remarks: normalizeText(raw.remarks),
-    tags: normalizeTags(raw.tags),
+    tags: normalizeTags(raw.resource_tags ?? raw.tags),
     baselineTable: normalizeText(statBase.base_table_name ?? statBase.baseTableName ?? raw.source_table),
     querySql: normalizeText(apiQuery.query_sql ?? apiQuery.querySql),
     queryDefaultParamsText: JSON.stringify(defaultParams, null, 2),
@@ -308,6 +309,7 @@ function buildEditableResourceValues(values: EditableResourceRecord) {
     region_coverage: values.regionCoverage.trim(),
     remarks: values.remarks.trim(),
     tags: values.tags,
+    resource_tags: values.tags,
     source_table: baselineTable,
     stat_base: {
       ...values.statBase,

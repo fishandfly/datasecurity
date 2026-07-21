@@ -23,7 +23,7 @@ type HomomorphicEvent = {
 }
 
 const stageLabels: Record<string, string> = {
-  created: '任务创建', queued: '任务排队', validation: '范围校验', health_check: '服务检查',
+  created: '任务创建', queued: '任务排队', validation: '范围校验', resource_read: '资源取数', health_check: '服务检查',
   encrypt: '密文准备', compute: '密文计算', result: '结果回传', failed: '执行失败',
 }
 
@@ -34,7 +34,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 function buildEvents(tasks: SecurityV3Record[]): HomomorphicEvent[] {
   return tasks.flatMap((task) => {
     const summary = asRecord(task.execution_summary_json)
-    const rawEvents = Array.isArray(summary.events) ? summary.events : []
+    const rawEvents = Array.isArray(summary.events) ? summary.events : Array.isArray(summary.logs) ? summary.logs : []
     const subject = asRecord(task.subject)
     return rawEvents.map((rawEvent, index) => {
       const event = asRecord(rawEvent)
@@ -95,7 +95,11 @@ export function SecurityHomomorphicLogsPage() {
     setError('')
     try {
       const records = await listSecurityV3Records('security_confidential_tasks', { appends: ['subject'], sort: ['-updatedAt', '-createdAt'] })
-      setTasks(records.filter((record) => record.task_status !== 'archived' && !['bfv', 'BFV'].includes(String(record.algorithm || ''))))
+      setTasks(records.filter((record) => (
+        record.task_status !== 'archived'
+        && ['bfv', 'ckks'].includes(String(record.algorithm || '').toLowerCase())
+        && asRecord(record.execution_summary_json).trigger === 'resource-api-policy'
+      )))
     } catch (currentError) {
       setError(toErrorMessage(currentError, '同态日志读取失败'))
     } finally {

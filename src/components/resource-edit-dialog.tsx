@@ -194,6 +194,7 @@ export function ResourceEditDialog({
     || !form.updateCycleId.trim()
     || !form.protectionLevel.trim()
     || !form.baselineTable.trim()
+    || splitTags(tagsText).length === 0
   ))
   const isSubmitDisabled = isLoading || isSaving || !form || Boolean(form && securityGovernanceMode && (
     !form.resourceName.trim()
@@ -316,6 +317,33 @@ export function ResourceEditDialog({
                       }}
                     />
                   </section>
+
+                  <label className="block space-y-2 rounded-2xl border border-[var(--dialog-panel-border)] bg-[linear-gradient(180deg,var(--dialog-panel-bg-start),var(--dialog-panel-bg-end))] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">资源标签 <span className="text-[var(--status-danger-text)]">*</span></div>
+                      <span className="text-[0.75rem] text-[var(--text-muted)]">用于分类分级与标签组合策略匹配</span>
+                    </div>
+                    <textarea
+                      value={tagsText}
+                      onChange={(event) => setTagsText(event.target.value)}
+                      rows={3}
+                      placeholder="例如：历史归档、明细受控、重要数据"
+                      className={DIALOG_TEXTAREA_CLASS}
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      {splitTags(tagsText).map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-flex rounded-full border border-[rgba(var(--theme-soft-rgb),0.2)] bg-[var(--primary-soft)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--primary-strong)]"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                      {splitTags(tagsText).length === 0 ? (
+                        <span className="text-[0.75rem] text-[var(--status-danger-text)]">请至少填写一个资源标签</span>
+                      ) : null}
+                    </div>
+                  </label>
 
                   <label className="block space-y-2">
                     <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">摘要</div>

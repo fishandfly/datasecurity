@@ -24,7 +24,14 @@ test('Python 运行时先完成 API Key 和主体 API 授权再加载访问策�
   assert.match(runtimeSource, /"API_NOT_AUTHORIZED"/)
 })
 
-test('访问策略提供资源级异常访问处置且不使用字段白名单', () => {
+test('访问策略支持标签组合分层和资源例外策略', () => {
+  assert.match(pageSource, /name: 'access_scope'/)
+  assert.match(pageSource, /value: 'label_group'/)
+  assert.match(pageSource, /name: 'security_tags'/)
+  assert.match(pageSource, /protectionLevels/)
+  assert.match(pageSource, /fieldTags/)
+  assert.match(runtimeSource, /resource_matches_policy_selector/)
+  assert.match(runtimeSource, /policy_selector_conditions/)
   assert.match(pageSource, /name: 'abnormal_access_rules_json'/)
   assert.match(runtimeSource, /"offHours"/)
   assert.match(runtimeSource, /"highFrequency"/)

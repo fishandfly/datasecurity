@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 import time
@@ -68,10 +69,11 @@ DENIALS = {
     "REPLAY_DETECTED": (409, "请求已处理，请勿重复提交", 100),
     "SUBJECT_DISABLED": (403, "访问主体不可用", 95),
     "API_NOT_AUTHORIZED": (403, "当前访问主体未获准访问该 API", 95),
-    "POLICY_NOT_FOUND": (403, "当前主体未获得该服务授权", 90),
+    "POLICY_NOT_FOUND": (403, "当前请求未匹配到适用的已发布访问策略", 90),
     "POLICY_EXPIRED": (403, "访问授权不在有效期内", 90),
     "IP_NOT_ALLOWED": (403, "当前网络来源不允许访问", 80),
     "FIELD_NOT_ALLOWED": (403, "请求包含未授权字段", 80),
+    "TAG_CONSTRAINT_VIOLATION": (403, "请求方式不符合数据标签安全约束", 90),
     "RISK_REJECTED": (403, "当前请求因安全风险被拒绝", 70),
     "QUERY_RANGE_EXCEEDED": (422, "查询范围超过授权限制", 60),
     "ROW_LIMIT_EXCEEDED": (422, "请求数据量超过授权限制", 70),
@@ -81,6 +83,11 @@ DENIALS = {
     "VALIDATION_ERROR": (400, "请求参数不符合要求", 60),
     "ROUTE_NOT_FOUND": (404, "数据服务未发布或已停用", 40),
     "UPSTREAM_UNAVAILABLE": (502, "上游数据服务暂不可用", 50),
+    "HOMOMORPHIC_UNSUPPORTED": (422, "当前数据 API 未声明同态计算能力", 60),
+    "HOMOMORPHIC_FIELD_INVALID": (422, "同态计算字段必须是数值类型", 60),
+    "HOMOMORPHIC_NO_DATA": (422, "授权范围内没有可用的数值数据", 40),
+    "HOMOMORPHIC_SAMPLE_LIMIT": (422, "授权范围内的样本数超过单次密态计算上限", 60),
+    "HOMOMORPHIC_UNAVAILABLE": (502, "同态计算服务暂不可用", 50),
 }
 
 DEFAULT_ABNORMAL_ACCESS_RULES = {
@@ -106,6 +113,9 @@ class RuntimeDenied(Exception):
         query_days: float = 0,
         requested_rows: int = 0,
         risk_score: int | None = None,
+        matched_labels: list[str] | tuple[str, ...] = (),
+        risk_factors: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
+        label_snapshot_version: str = "",
     ) -> None:
         status, message, default_risk = DENIALS[code]
         super().__init__(message)
@@ -120,6 +130,9 @@ class RuntimeDenied(Exception):
         self.query_days = max(0, query_days)
         self.requested_rows = max(0, requested_rows)
         self.risk_score = max(0, min(100, risk_score if risk_score is not None else default_risk))
+        self.matched_labels = list(matched_labels)
+        self.risk_factors = list(risk_factors)
+        self.label_snapshot_version = label_snapshot_version
 
 
 @dataclass(frozen=True)
@@ -132,6 +145,9 @@ class RuntimeContext:
     client_ip: str
     query_days: float
     requested_rows: int
+    matched_labels: tuple[str, ...] = ()
+    risk_factors: tuple[dict[str, Any], ...] = ()
+    label_snapshot_version: str = ""
 
     @property
     def output_mode(self) -> str:
@@ -189,6 +205,187 @@ def _json_object(value: object) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+def _normalized_tags(*values: object) -> list[str]:
+    tags: list[str] = []
+    for value in values:
+        candidates = _json_list(value)
+        if not candidates and isinstance(value, str) and value.strip() and not value.lstrip().startswith("["):
+            candidates = [item for item in re.split(r"[,，]", value) if item.strip()]
+        for candidate in candidates:
+            tag = str(candidate or "").strip()
+            if tag and tag not in tags:
+                tags.append(tag)
+    return tags
+
+
+def _policy_runtime_snapshot(policy: dict[str, Any]) -> dict[str, Any]:
+    return _json_object(_json_object(policy.get("policy_detail_json")).get("runtimeSnapshot"))
+
+
+def build_resource_label_snapshot(resource_id: object, snapshot_version: str) -> dict[str, Any]:
+    resource = fetch_one(
+        "SELECT * FROM eco_data_resources WHERE id=%(id)s LIMIT 1",
+        {"id": resource_id},
+    ) or {}
+    profile = fetch_one(
+        """
+        SELECT * FROM eco_resource_security_policies
+        WHERE resource_id=%(resource_id)s AND policy_kind='resource_profile'
+        ORDER BY "updatedAt" DESC NULLS LAST, id DESC
+        LIMIT 1
+        """,
+        {"resource_id": resource_id},
+    ) or {}
+    fields = fetch_all(
+        """
+        SELECT field_code, security_level, field_tags, required_desensitization,
+               important_field_flag
+        FROM eco_resource_security_fields
+        WHERE resource_id=%(resource_id)s
+        ORDER BY seq ASC NULLS LAST, id ASC
+        """,
+        {"resource_id": resource_id},
+    )
+
+    tags = _normalized_tags(resource.get("tags"), resource.get("resource_tags"), profile.get("security_tags"))
+    derived_tags = []
+    flag_tags = (
+        ("important_data_flag", "重要数据"),
+        ("core_control_flag", "核心管控"),
+        ("desensitization_required", "需脱敏"),
+        ("approval_required", "需审批"),
+    )
+    for field_name, label in flag_tags:
+        if profile.get(field_name) is True:
+            derived_tags.append(label)
+    if profile.get("export_allowed") is False:
+        derived_tags.append("禁止导出")
+    protection_level = str(resource.get("protection_level") or "l2").lower()
+    protection_tag = {"l1": "仅聚合", "l2": "明细受控", "l3": "仅密态"}.get(protection_level)
+    if protection_tag:
+        derived_tags.append(protection_tag)
+    tags = _normalized_tags(tags, derived_tags)
+
+    field_tags: dict[str, list[str]] = {}
+    masked_fields: list[str] = []
+    identifier_fields: list[str] = []
+    levels: list[str] = []
+    for field in fields:
+        code = str(field.get("field_code") or "").strip().upper()
+        if not code:
+            continue
+        current_tags = _normalized_tags(field.get("field_tags"))
+        level = str(field.get("security_level") or "").strip().lower()
+        if level:
+            levels.append(level)
+        if field.get("important_field_flag") is True and "重要字段" not in current_tags:
+            current_tags.append("重要字段")
+        field_tags[code] = current_tags
+        if field.get("required_desensitization") is True or any("脱敏" in tag for tag in current_tags):
+            masked_fields.append(code)
+        if any(marker in tag for tag in current_tags for marker in ("标识符", "身份标识", "直接标识")):
+            identifier_fields.append(code)
+
+    all_markers = " ".join(tags + levels).lower()
+    if profile.get("core_control_flag") is True or any(marker in all_markers for marker in ("核心", "core")):
+        sensitivity = "core"
+    elif profile.get("important_data_flag") is True or any(marker in all_markers for marker in ("重要", "important")):
+        sensitivity = "important"
+    elif any(marker in all_markers for marker in ("敏感", "sensitive")):
+        sensitivity = "sensitive"
+    elif protection_level == "l2" or any(marker in all_markers for marker in ("内部", "internal")):
+        sensitivity = "internal"
+    else:
+        sensitivity = "public"
+    multiplier = {"public": 1.0, "internal": 1.1, "sensitive": 1.25, "important": 1.5, "core": 1.8}[sensitivity]
+
+    return {
+        "version": snapshot_version,
+        "resourceId": resource_id,
+        "protectionLevel": protection_level,
+        "sensitivity": sensitivity,
+        "riskMultiplier": multiplier,
+        "matchedLabels": tags,
+        "fieldTags": field_tags,
+        "identifierFields": identifier_fields,
+        "hardConstraints": {
+            "aggregateOnly": protection_level == "l1" or "仅聚合" in tags,
+            "encryptedOnly": protection_level == "l3" or "仅密态" in tags,
+            "exportForbidden": "禁止导出" in tags,
+            "maskedFields": masked_fields,
+        },
+        "classification": {
+            "securityCategoryId": profile.get("security_category_id"),
+            "securityLevelId": profile.get("security_level_id"),
+            "dataSubjectTypeId": profile.get("data_subject_type_id"),
+        },
+    }
+
+
+def build_policy_runtime_snapshot(policy: dict[str, Any], snapshot_version: str) -> dict[str, Any]:
+    return build_resource_label_snapshot(policy.get("resource_id"), snapshot_version)
+
+
+def policy_label_selector(policy: dict[str, Any]) -> dict[str, Any]:
+    configured = _json_object(policy.get("security_profile_json"))
+    try:
+        priority = int(configured.get("priority") or 100)
+    except (TypeError, ValueError):
+        priority = 100
+    return {
+        "match": "any" if str(configured.get("match") or "all").lower() == "any" else "all",
+        "priority": max(0, min(1000, priority)),
+        "resourceTags": _normalized_tags(policy.get("security_tags"), configured.get("resourceTags")),
+        "protectionLevels": [str(item).strip().lower() for item in _json_list(configured.get("protectionLevels")) if str(item).strip()],
+        "fieldTags": _normalized_tags(configured.get("fieldTags")),
+        "securityCategoryId": policy.get("security_category_id") or configured.get("securityCategoryId"),
+        "securityLevelId": policy.get("security_level_id") or configured.get("securityLevelId"),
+        "dataSubjectTypeId": policy.get("data_subject_type_id") or configured.get("dataSubjectTypeId"),
+    }
+
+
+def policy_selector_conditions(selector: dict[str, Any]) -> list[bool]:
+    return [
+        bool(selector.get("resourceTags")),
+        bool(selector.get("protectionLevels")),
+        bool(selector.get("fieldTags")),
+        selector.get("securityCategoryId") not in {None, ""},
+        selector.get("securityLevelId") not in {None, ""},
+        selector.get("dataSubjectTypeId") not in {None, ""},
+    ]
+
+
+def resource_matches_policy_selector(snapshot: dict[str, Any], selector: dict[str, Any]) -> bool:
+    checks: list[bool] = []
+    resource_tags = set(_normalized_tags(snapshot.get("matchedLabels")))
+    selected_resource_tags = set(_normalized_tags(selector.get("resourceTags")))
+    if selected_resource_tags:
+        checks.append(selected_resource_tags.issubset(resource_tags))
+    selected_levels = {str(item).lower() for item in _json_list(selector.get("protectionLevels"))}
+    if selected_levels:
+        checks.append(str(snapshot.get("protectionLevel") or "").lower() in selected_levels)
+    selected_field_tags = set(_normalized_tags(selector.get("fieldTags")))
+    if selected_field_tags:
+        current_field_tags = {
+            tag
+            for tags in _json_object(snapshot.get("fieldTags")).values()
+            for tag in _normalized_tags(tags)
+        }
+        checks.append(selected_field_tags.issubset(current_field_tags))
+    classification = _json_object(snapshot.get("classification"))
+    for selector_key, snapshot_key in (
+        ("securityCategoryId", "securityCategoryId"),
+        ("securityLevelId", "securityLevelId"),
+        ("dataSubjectTypeId", "dataSubjectTypeId"),
+    ):
+        selected = selector.get(selector_key)
+        if selected not in {None, ""}:
+            checks.append(str(classification.get(snapshot_key) or "") == str(selected))
+    if not checks:
+        return False
+    return any(checks) if selector.get("match") == "any" else all(checks)
 
 
 def abnormal_access_rule(policy: dict[str, Any], key: str) -> dict[str, Any]:
@@ -636,28 +833,60 @@ def load_subject_by_api_key(api_key: str) -> dict[str, Any] | None:
 
 
 def load_policy(subject_id: int, api_id: int, scenario: str) -> dict[str, Any] | None:
-    return fetch_one(
+    candidates = fetch_all(
         """
         SELECT policy.*, baseline.frequency_avg, baseline.frequency_stddev,
                baseline.query_days_avg, baseline.query_days_stddev,
                baseline.rows_avg, baseline.rows_stddev,
-               baseline.normal_time_ranges_json AS baseline_time_ranges
+               baseline.normal_time_ranges_json AS baseline_time_ranges,
+               current_api.resource_id AS requested_resource_id
         FROM eco_resource_security_policies policy
+        JOIN security_api_resources current_api ON current_api.id = %(api_id)s
         LEFT JOIN security_behavior_baselines baseline
           ON baseline.subject_id = policy.subject_id
-         AND baseline.api_resource_id = policy.api_resource_id
+         AND baseline.api_resource_id = current_api.id
          AND baseline.baseline_status = 'enabled'
         WHERE policy.policy_kind = 'access_policy'
           AND policy.policy_status = 'enabled'
           AND policy.publish_status = 'success'
           AND policy.subject_id = %(subject_id)s
-          AND policy.api_resource_id = %(api_id)s
           AND policy.scenario = %(scenario)s
-        ORDER BY policy.policy_version DESC
-        LIMIT 1
+          AND (
+            policy.api_resource_id = current_api.id
+            OR (policy.access_scope = 'label_group' AND policy.api_resource_id IS NULL)
+          )
+        ORDER BY CASE WHEN policy.api_resource_id = current_api.id THEN 0 ELSE 1 END,
+                 policy.policy_version DESC, policy.id DESC
         """,
         {"subject_id": subject_id, "api_id": api_id, "scenario": scenario},
     )
+    exact = next((candidate for candidate in candidates if candidate.get("api_resource_id") is not None), None)
+    if exact:
+        return exact
+    grouped = [candidate for candidate in candidates if candidate.get("access_scope") == "label_group"]
+    if not grouped:
+        return None
+    resource_id = grouped[0].get("requested_resource_id")
+    snapshot_version = str(grouped[0].get("gateway_config_version") or "runtime-live")
+    resource_snapshot = build_resource_label_snapshot(resource_id, snapshot_version)
+    matches = []
+    for candidate in grouped:
+        selector = policy_label_selector(candidate)
+        if resource_matches_policy_selector(resource_snapshot, selector):
+            specificity = sum(policy_selector_conditions(selector))
+            matches.append((int(selector["priority"]), specificity, int(candidate.get("policy_version") or 0), candidate))
+    if not matches:
+        return None
+    selected = max(matches, key=lambda item: (item[0], item[1], item[2]))[3]
+    selected = dict(selected)
+    detail = _json_object(selected.get("policy_detail_json"))
+    detail["runtimeSnapshot"] = {
+        **resource_snapshot,
+        "version": str(selected.get("gateway_config_version") or resource_snapshot.get("version") or ""),
+        "matchedPolicySelector": policy_label_selector(selected),
+    }
+    selected["policy_detail_json"] = detail
+    return selected
 
 
 def client_ip(request) -> str:
@@ -760,6 +989,41 @@ def authorize(request, body: bytes) -> RuntimeContext:
         raise RuntimeDenied(
             "POLICY_NOT_FOUND", request_id=request_id, api=api, subject=subject, client_ip=address
         )
+    snapshot = _policy_runtime_snapshot(policy)
+    matched_labels = tuple(_normalized_tags(snapshot.get("matchedLabels")))
+    label_snapshot_version = str(snapshot.get("version") or "")
+    hard_constraints = _json_object(snapshot.get("hardConstraints"))
+    risk_factors: list[dict[str, Any]] = []
+    query_days = 0.0
+    requested_rows = 0
+
+    def add_risk_factor(code: str, label: str, score: int, detail: str) -> None:
+        if score <= 0:
+            return
+        risk_factors.append({"code": code, "label": label, "score": score, "detail": detail})
+
+    def policy_denied(code: str, risk_score: int | None = None) -> RuntimeDenied:
+        return RuntimeDenied(
+            code,
+            request_id=request_id,
+            api=api,
+            subject=subject,
+            policy=policy,
+            client_ip=address,
+            query_days=query_days,
+            requested_rows=requested_rows,
+            risk_score=risk_score,
+            matched_labels=matched_labels,
+            risk_factors=risk_factors,
+            label_snapshot_version=label_snapshot_version,
+        )
+
+    if hard_constraints.get("aggregateOnly") and str(policy.get("output_mode") or "detail") != "aggregate":
+        add_risk_factor("aggregateOnly", "仅允许聚合", 90, "资源标签要求仅输出聚合结果")
+        raise policy_denied("TAG_CONSTRAINT_VIOLATION", 90)
+    if hard_constraints.get("encryptedOnly") and str(policy.get("output_mode") or "detail") != "encrypted":
+        add_risk_factor("encryptedOnly", "仅允许密态", 95, "资源标签要求仅输出密态结果")
+        raise policy_denied("TAG_CONSTRAINT_VIOLATION", 95)
     if settings.enforce_source_ip and not ip_allowed(address, _json_list(policy.get("source_ips_json"))):
         raise RuntimeDenied(
             "IP_NOT_ALLOWED",
@@ -795,18 +1059,10 @@ def authorize(request, body: bytes) -> RuntimeContext:
         policy, "queryRangeExceeded", query_days > int(policy.get("max_query_days") or 1)
     )
     extra_risk += risk_points
+    if risk_points:
+        add_risk_factor("queryRangeExceeded", "查询时间范围", risk_points, f"请求 {query_days:g} 天，策略上限 {int(policy.get('max_query_days') or 1)} 天")
     if should_deny:
-        raise RuntimeDenied(
-            "QUERY_RANGE_EXCEEDED",
-            request_id=request_id,
-            api=api,
-            subject=subject,
-            policy=policy,
-            client_ip=address,
-            query_days=query_days,
-            requested_rows=requested_rows,
-            risk_score=risk_points,
-        )
+        raise policy_denied("QUERY_RANGE_EXCEEDED", risk_points)
 
     region = effective_param("regionCode")
     organization = effective_param("organizationCode")
@@ -819,13 +1075,12 @@ def authorize(request, body: bytes) -> RuntimeContext:
     )
     should_deny, risk_points = violation_risk(policy, "scopeViolation", scope_violation)
     extra_risk += risk_points
+    if risk_points:
+        add_risk_factor("scopeViolation", "数据范围越界", risk_points, "请求的区域或组织不在授权范围内")
     if should_deny:
-        raise RuntimeDenied(
-            "SCOPE_VIOLATION", request_id=request_id, api=api, subject=subject, policy=policy,
-            client_ip=address, query_days=query_days, requested_rows=requested_rows,
-            risk_score=risk_points,
-        )
+        raise policy_denied("SCOPE_VIOLATION", risk_points)
     fields = effective_param("fields")
+    requested_codes: list[str] = []
     if fields:
         requested_fields = [item.strip() for item in str(fields).split(",") if item.strip()]
         runtime_field_map = _json_object(_json_object(api.get("runtime_config_json")).get("fieldMap"))
@@ -840,6 +1095,10 @@ def authorize(request, body: bytes) -> RuntimeContext:
                 "FIELD_NOT_ALLOWED", request_id=request_id, api=api, subject=subject, policy=policy,
                 client_ip=address, query_days=query_days, requested_rows=requested_rows,
             )
+        masked_fields = {str(code).upper() for code in _json_list(hard_constraints.get("maskedFields"))}
+        if str(policy.get("output_mode") or "detail") == "detail" and masked_fields.intersection(requested_codes):
+            add_risk_factor("maskedFieldDetail", "脱敏字段明文请求", 90, "请求包含必须脱敏的字段")
+            raise policy_denied("TAG_CONSTRAINT_VIOLATION", 90)
 
     rate_key = f"{subject['subject_code']}:{api['api_code']}:{datetime.now().strftime('%Y%m%d%H%M')}"
     frequency = request_memory.increment_rate(rate_key)
@@ -847,12 +1106,10 @@ def authorize(request, body: bytes) -> RuntimeContext:
         policy, "highFrequency", frequency > int(policy.get("max_requests_per_minute") or 60)
     )
     extra_risk += risk_points
+    if risk_points:
+        add_risk_factor("highFrequency", "高频调用", risk_points, f"当前分钟已调用 {frequency} 次")
     if should_deny:
-        raise RuntimeDenied(
-            "RATE_LIMITED", request_id=request_id, api=api, subject=subject, policy=policy,
-            client_ip=address, query_days=query_days, requested_rows=requested_rows,
-            risk_score=risk_points,
-        )
+        raise policy_denied("RATE_LIMITED", risk_points)
     allowed_time_ranges = _json_list(policy.get("allowed_time_ranges_json"))
     should_deny, risk_points = violation_risk(
         policy,
@@ -860,22 +1117,18 @@ def authorize(request, body: bytes) -> RuntimeContext:
         bool(allowed_time_ranges) and not in_time_ranges(datetime.now().astimezone(), allowed_time_ranges),
     )
     extra_risk += risk_points
+    if risk_points:
+        add_risk_factor("offHours", "非允许时段", risk_points, "当前时间不在策略允许时段内")
     if should_deny:
-        raise RuntimeDenied(
-            "OFF_HOURS", request_id=request_id, api=api, subject=subject, policy=policy,
-            client_ip=address, query_days=query_days, requested_rows=requested_rows,
-            risk_score=risk_points,
-        )
+        raise policy_denied("OFF_HOURS", risk_points)
     should_deny, risk_points = violation_risk(
         policy, "rowLimitExceeded", requested_rows > int(policy.get("max_rows") or 1000)
     )
     extra_risk += risk_points
+    if risk_points:
+        add_risk_factor("rowLimitExceeded", "返回行数超限", risk_points, f"请求 {requested_rows} 行，策略上限 {int(policy.get('max_rows') or 1000)} 行")
     if should_deny:
-        raise RuntimeDenied(
-            "ROW_LIMIT_EXCEEDED", request_id=request_id, api=api, subject=subject, policy=policy,
-            client_ip=address, query_days=query_days, requested_rows=requested_rows,
-            risk_score=risk_points,
-        )
+        raise policy_denied("ROW_LIMIT_EXCEEDED", risk_points)
     behavior_rule = abnormal_access_rule(policy, "behaviorAnomaly")
     baseline = policy if policy.get("frequency_avg") is not None else None
     behavior_score = calculate_risk(
@@ -890,20 +1143,29 @@ def authorize(request, body: bytes) -> RuntimeContext:
     should_deny, risk_points = violation_risk(
         policy, "behaviorAnomaly", behavior_score > 0
     )
+    if risk_points and snapshot:
+        risk_points = min(100, round(risk_points * float(snapshot.get("riskMultiplier") or 1)))
     extra_risk += risk_points
+    if risk_points:
+        multiplier = float(snapshot.get("riskMultiplier") or 1)
+        detail = "行为偏离已学习基线"
+        if multiplier > 1:
+            detail += f"，按 {snapshot.get('sensitivity') or '敏感'} 级数据放大 {multiplier:g} 倍"
+        add_risk_factor("behaviorAnomaly", "行为基线偏离", risk_points, detail)
     if should_deny:
-        raise RuntimeDenied(
-            "RISK_REJECTED", request_id=request_id, api=api, subject=subject, policy=policy,
-            client_ip=address, query_days=query_days, requested_rows=requested_rows,
-            risk_score=risk_points,
-        )
+        raise policy_denied("RISK_REJECTED", risk_points)
+
+    if snapshot and str(subject.get("subject_type") or "") == "external_party":
+        extra_risk += 10
+        add_risk_factor("externalSubject", "外部访问主体", 10, "外部访问方请求受控数据")
+    identifier_fields = {str(code).upper() for code in _json_list(snapshot.get("identifierFields"))}
+    if fields and identifier_fields.intersection(requested_codes):
+        extra_risk += 15
+        add_risk_factor("identifierField", "直接标识符", 15, "请求包含可直接识别对象的字段")
     score = min(100, extra_risk)
     threshold = int(policy.get("risk_threshold") or 70)
     if score >= threshold:
-        raise RuntimeDenied(
-            "RISK_REJECTED", request_id=request_id, api=api, subject=subject, policy=policy,
-            client_ip=address, query_days=query_days, requested_rows=requested_rows, risk_score=score,
-        )
+        raise policy_denied("RISK_REJECTED", score)
     return RuntimeContext(
         request_id=request_id,
         api=api,
@@ -913,6 +1175,9 @@ def authorize(request, body: bytes) -> RuntimeContext:
         client_ip=address,
         query_days=query_days,
         requested_rows=requested_rows,
+        matched_labels=matched_labels,
+        risk_factors=tuple(risk_factors),
+        label_snapshot_version=label_snapshot_version,
     )
 
 
@@ -1208,6 +1473,405 @@ def detail_measurements(params, context: RuntimeContext) -> tuple[list[dict[str,
     return rows, {"page": page, "pageSize": page_size, "returnedRows": len(rows)}
 
 
+def _homomorphic_denied(code: str, context: RuntimeContext) -> RuntimeDenied:
+    return RuntimeDenied(
+        code,
+        request_id=context.request_id,
+        api=context.api,
+        subject=context.subject,
+        policy=context.policy,
+        client_ip=context.client_ip,
+        query_days=context.query_days,
+        requested_rows=context.requested_rows,
+    )
+
+
+def _homomorphic_event(
+    stage: str,
+    result: str,
+    message: str,
+    *,
+    request_id: str = "",
+    duration_ms: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": f"{stage}-{uuid4()}",
+        "time": datetime.now(timezone.utc).isoformat(),
+        "stage": stage,
+        "result": result,
+        "message": message,
+        "requestId": request_id,
+        "durationMs": duration_ms,
+    }
+
+
+def _homomorphic_resource(context: RuntimeContext) -> dict[str, Any]:
+    resource = fetch_one(
+        "SELECT * FROM eco_data_resources WHERE id=%(id)s LIMIT 1",
+        {"id": context.api.get("resource_id")},
+    )
+    if not resource or str(resource.get("resource_status") or "") != "enabled":
+        raise _homomorphic_denied("ROUTE_NOT_FOUND", context)
+    return resource
+
+
+def _homomorphic_field(context: RuntimeContext, resource: dict[str, Any], field_code: str) -> dict[str, Any]:
+    field = fetch_one(
+        """
+        SELECT * FROM eco_resource_security_fields
+        WHERE resource_id=%(resource_id)s AND upper(field_code)=upper(%(field_code)s)
+        LIMIT 1
+        """,
+        {"resource_id": resource.get("id"), "field_code": field_code},
+    )
+    if not field:
+        raise _homomorphic_denied("FIELD_NOT_ALLOWED", context)
+    data_type = str(field.get("data_type") or "").strip().lower()
+    numeric_markers = ("int", "decimal", "numeric", "float", "double", "real", "number")
+    if not any(marker in data_type for marker in numeric_markers):
+        raise _homomorphic_denied("HOMOMORPHIC_FIELD_INVALID", context)
+    return field
+
+
+def _homomorphic_key(context: RuntimeContext, algorithm: str) -> dict[str, Any]:
+    key = fetch_one(
+        """
+        SELECT * FROM security_crypto_keys
+        WHERE subject_id=%(subject_id)s AND lower(algorithm_code)=%(algorithm)s
+          AND key_status='enabled' AND valid_from <= %(now)s
+          AND (valid_to IS NULL OR valid_to > %(now)s)
+        ORDER BY valid_from DESC, id DESC
+        LIMIT 1
+        """,
+        {
+            "subject_id": context.subject.get("id"),
+            "algorithm": algorithm.lower(),
+            "now": datetime.now(timezone.utc),
+        },
+    )
+    if not key:
+        raise _homomorphic_denied("HOMOMORPHIC_UNAVAILABLE", context)
+    return key
+
+
+def _homomorphic_values(
+    params: dict[str, Any],
+    context: RuntimeContext,
+    processing_path: str,
+    field_code: str,
+) -> list[int | float]:
+    if processing_path == "/internal/region-hourly":
+        region, start_at, end_at = _validate_range(params, context)
+        organization = str(params.get("organizationCode") or "").strip()
+        statement = sql.SQL(
+            "SELECT active_power FROM measurement_demo.active_power_measurements "
+            "WHERE region_code=%(region)s {organization_filter} "
+            "AND measurement_time >= %(start_at)s AND measurement_time < %(end_at)s "
+            "ORDER BY measurement_time, point_code LIMIT 65"
+        ).format(
+            organization_filter=sql.SQL("AND organization_code=%(organization)s")
+            if organization
+            else sql.SQL(""),
+        )
+        with measurement_connection(context) as current, current.cursor() as cursor:
+            cursor.execute(
+                statement,
+                {
+                    "region": region,
+                    "organization": organization,
+                    "start_at": start_at,
+                    "end_at": end_at,
+                },
+            )
+            raw_values = [row["active_power"] for row in cursor.fetchall()]
+    else:
+        query_params = {
+            **params,
+            "fields": field_code,
+            "page": 1,
+            "pageSize": 65,
+        }
+        rows, _ = resource_query(query_params, context)
+        result_key = _camel_case(field_code.lower())
+        raw_values = [row.get(result_key) for row in rows]
+
+    values: list[int | float] = []
+    for value in raw_values:
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+            raise _homomorphic_denied("HOMOMORPHIC_FIELD_INVALID", context)
+        number = float(value)
+        if not math.isfinite(number):
+            raise _homomorphic_denied("HOMOMORPHIC_FIELD_INVALID", context)
+        values.append(int(value) if isinstance(value, int) and not isinstance(value, bool) else number)
+    if not values:
+        raise _homomorphic_denied("HOMOMORPHIC_NO_DATA", context)
+    if len(values) > 64:
+        raise _homomorphic_denied("HOMOMORPHIC_SAMPLE_LIMIT", context)
+    return values
+
+
+def _create_homomorphic_task(
+    context: RuntimeContext,
+    resource: dict[str, Any],
+    field_code: str,
+    operation: str,
+    algorithm: str,
+    crypto_key: dict[str, Any],
+    params: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    now = datetime.now(timezone.utc)
+    task_code = f"HE-AUTO-{uuid4().hex[:20].upper()}"
+    events = [
+        _homomorphic_event("created", "success", "资源 API 请求命中密态策略，已自动创建任务。", request_id=context.request_id),
+        _homomorphic_event("validation", "success", "访问主体、数据范围与数值字段校验通过。", request_id=context.request_id),
+    ]
+    summary = {
+        "trigger": "resource-api-policy",
+        "outputMode": "encrypted",
+        "requestId": context.request_id,
+        "resource": {
+            "id": resource.get("id"),
+            "code": resource.get("resource_code"),
+            "name": resource.get("resource_name"),
+        },
+        "fieldCode": field_code,
+        "operation": operation,
+        "scope": {
+            "startAt": params.get("startAt"),
+            "endAt": params.get("endAt"),
+            "regionCode": params.get("regionCode"),
+            "organizationCode": params.get("organizationCode"),
+        },
+        "events": events,
+        "logs": events,
+    }
+    task = fetch_one(
+        """
+        INSERT INTO security_confidential_tasks (
+          task_code, task_name, scenario, task_status, risk_level, algorithm,
+          source_domain, target_domain, progress, execution_summary_json, task_tags,
+          operation, region_scope_json, organization_scope_json, measure_field_code,
+          data_start_at, data_end_at, sample_count, idempotency_key, started_at,
+          subject_id, api_resource_id, crypto_key_id, "createdAt", "updatedAt"
+        ) VALUES (
+          %(task_code)s, %(task_name)s, %(scenario)s, 'running', %(risk_level)s, %(algorithm)s,
+          'data-resource', 'authorized-consumer', 10, %(summary)s::jsonb, %(tags)s::json,
+          %(operation)s, %(regions)s::jsonb, %(organizations)s::jsonb, %(field_code)s,
+          %(start_at)s, %(end_at)s, 0, %(idempotency_key)s, %(now)s,
+          %(subject_id)s, %(api_id)s, %(key_id)s, %(now)s, %(now)s
+        ) RETURNING *
+        """,
+        {
+            "task_code": task_code,
+            "task_name": f"{resource.get('resource_name') or '数据资源'}{field_code}{'平均值' if operation == 'mean' else '求和'}密态计算",
+            "scenario": str(context.policy.get("scenario") or "resource-data-query"),
+            "risk_level": context.level,
+            "algorithm": algorithm.lower(),
+            "summary": json.dumps(summary, ensure_ascii=False),
+            "tags": json.dumps(["资源 API 触发", "自动密态计算", algorithm.upper()], ensure_ascii=False),
+            "operation": operation,
+            "regions": json.dumps([params.get("regionCode")] if params.get("regionCode") else [], ensure_ascii=False),
+            "organizations": json.dumps([params.get("organizationCode")] if params.get("organizationCode") else [], ensure_ascii=False),
+            "field_code": field_code,
+            "start_at": _parse_time(str(params.get("startAt") or "")),
+            "end_at": _parse_time(str(params.get("endAt") or "")),
+            "idempotency_key": f"resource-api:{context.request_id}",
+            "subject_id": context.subject.get("id"),
+            "api_id": context.api.get("id"),
+            "key_id": crypto_key.get("id"),
+            "now": now,
+        },
+    ) or {}
+    execute(
+        """
+        INSERT INTO security_confidential_task_resources (
+          task_id, resource_id, resource_role, field_scope_json, relation_tags, "createdAt", "updatedAt"
+        ) VALUES (
+          %(task_id)s, %(resource_id)s, 'primary', %(field_scope)s::jsonb, %(tags)s::json, %(now)s, %(now)s
+        )
+        """,
+        {
+            "task_id": task.get("id"),
+            "resource_id": resource.get("id"),
+            "field_scope": json.dumps({"fields": [field_code]}, ensure_ascii=False),
+            "tags": json.dumps(["服务端取数", "密态计算"], ensure_ascii=False),
+            "now": now,
+        },
+    )
+    return task, events
+
+
+def _fail_homomorphic_task(
+    task_id: int,
+    summary: dict[str, Any],
+    events: list[dict[str, Any]],
+    message: str,
+    started_timer: float,
+) -> None:
+    duration_ms = round((time.perf_counter() - started_timer) * 1000)
+    failed_event = _homomorphic_event("failed", "failed", message, duration_ms=duration_ms)
+    failed_events = [*events, failed_event]
+    execute(
+        """
+        UPDATE security_confidential_tasks
+        SET task_status='failed', progress=0, duration_ms=%(duration_ms)s,
+            error_summary=%(message)s,
+            execution_summary_json=%(summary)s::jsonb, "updatedAt"=%(now)s
+        WHERE id=%(id)s
+        """,
+        {
+            "id": task_id,
+            "duration_ms": duration_ms,
+            "message": message,
+            "summary": json.dumps({**summary, "events": failed_events, "logs": failed_events}, ensure_ascii=False),
+            "now": datetime.now(timezone.utc),
+        },
+    )
+
+
+async def execute_homomorphic_resource_request(
+    params: dict[str, Any],
+    context: RuntimeContext,
+    processing_path: str,
+) -> tuple[dict[str, Any], int]:
+    if context.api.get("supports_homomorphic") is not True:
+        raise _homomorphic_denied("HOMOMORPHIC_UNSUPPORTED", context)
+    operation = str(params.get("operation") or "").strip().lower()
+    if operation not in {"sum", "mean"}:
+        raise _homomorphic_denied("VALIDATION_ERROR", context)
+    default_field = "P_ACTIVE" if processing_path == "/internal/region-hourly" else ""
+    field_code = str(params.get("fieldCode") or default_field).strip().upper()
+    if not field_code:
+        raise _homomorphic_denied("VALIDATION_ERROR", context)
+
+    resource = _homomorphic_resource(context)
+    field = _homomorphic_field(context, resource, field_code)
+    data_type = str(field.get("data_type") or "").lower()
+    algorithm = "BFV" if "int" in data_type and not any(marker in data_type for marker in ("point", "decimal")) else "CKKS"
+    crypto_key = _homomorphic_key(context, algorithm)
+    task, events = _create_homomorphic_task(
+        context, resource, field_code, operation, algorithm, crypto_key, params,
+    )
+    task_id = int(task["id"])
+    summary = _json_object(task.get("execution_summary_json"))
+    started_timer = time.perf_counter()
+    try:
+        values = _homomorphic_values(params, context, processing_path, field_code)
+        read_event = _homomorphic_event(
+            "resource_read", "success", f"已在服务端按授权范围读取 {len(values)} 条数值样本。",
+            request_id=context.request_id,
+        )
+        compute_event = _homomorphic_event(
+            "compute", "pending", "原始数值已在内存中提交密态计算，不写入任务记录。",
+            request_id=context.request_id,
+        )
+        events.extend([read_event, compute_event])
+        execute(
+            """
+            UPDATE security_confidential_tasks
+            SET progress=45, sample_count=%(sample_count)s,
+                execution_summary_json=%(summary)s::jsonb, "updatedAt"=%(now)s
+            WHERE id=%(id)s
+            """,
+            {
+                "id": task_id,
+                "sample_count": len(values),
+                "summary": json.dumps({**summary, "sampleCount": len(values), "events": events, "logs": events}, ensure_ascii=False),
+                "now": datetime.now(timezone.utc),
+            },
+        )
+        async with httpx.AsyncClient(timeout=settings.connection_timeout_seconds) as client:
+            response = await client.post(
+                f"{settings.homomorphic_service_url.rstrip('/')}/v1/tasks/execute",
+                json={
+                    "taskCode": task.get("task_code"),
+                    "scheme": algorithm,
+                    "operation": operation,
+                    "values": values,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("resultSummary"), dict):
+            raise ValueError("invalid homomorphic response")
+    except RuntimeDenied as error:
+        _fail_homomorphic_task(task_id, summary, events, error.message, started_timer)
+        raise
+    except (httpx.HTTPError, ValueError) as error:
+        denied = _homomorphic_denied("HOMOMORPHIC_UNAVAILABLE", context)
+        _fail_homomorphic_task(task_id, summary, events, denied.message, started_timer)
+        raise denied from error
+
+    duration_ms = round((time.perf_counter() - started_timer) * 1000)
+    engine_request_id = str(payload.get("requestId") or "")
+    result_summary = {
+        "value": payload["resultSummary"].get("value"),
+        "verificationPassed": payload["resultSummary"].get("verificationPassed") is True,
+        "absoluteError": payload["resultSummary"].get("absoluteError"),
+        "tolerance": payload["resultSummary"].get("tolerance"),
+    }
+    safe_result = {
+        "requestId": engine_request_id,
+        "status": "completed",
+        "scheme": algorithm,
+        "operation": operation,
+        "resultSummary": result_summary,
+        "durationMs": payload.get("durationMs"),
+        "ciphertextCount": payload.get("ciphertextCount"),
+    }
+    result_hash = hashlib.sha256(
+        json.dumps(safe_result, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    result_event = _homomorphic_event(
+        "result", "success", "密态计算已完成，结果摘要已回传。",
+        request_id=engine_request_id,
+        duration_ms=duration_ms,
+    )
+    completed_events = [*events, result_event]
+    completed_summary = {
+        **summary,
+        "sampleCount": len(values),
+        "result": safe_result,
+        "events": completed_events,
+        "logs": completed_events,
+    }
+    now = datetime.now(timezone.utc)
+    execute(
+        """
+        UPDATE security_confidential_tasks
+        SET task_status='completed', progress=100, sample_count=%(sample_count)s,
+            completed_at=%(now)s, duration_ms=%(duration_ms)s, error_summary=NULL,
+            ciphertext_result_ref=%(result_ref)s, result_hash=%(result_hash)s,
+            execution_summary_json=%(summary)s::jsonb, "updatedAt"=%(now)s
+        WHERE id=%(id)s
+        """,
+        {
+            "id": task_id,
+            "sample_count": len(values),
+            "now": now,
+            "duration_ms": duration_ms,
+            "result_ref": f"homomorphic-result:{task.get('task_code')}:{engine_request_id}",
+            "result_hash": result_hash,
+            "summary": json.dumps(completed_summary, ensure_ascii=False),
+        },
+    )
+    return {
+        "requestId": context.request_id,
+        "taskCode": task.get("task_code"),
+        "outputMode": "encrypted",
+        "resource": completed_summary["resource"],
+        "fieldCode": field_code,
+        "operation": operation,
+        "algorithm": algorithm,
+        "sampleCount": len(values),
+        "resultSummary": result_summary,
+        "engineRequestId": engine_request_id,
+        "durationMs": duration_ms,
+    }, 1
+
+
 async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
     mode = str(context.api.get("access_mode") or "")
     processing_path = str(context.api.get("orchestrator_path") or "")
@@ -1250,6 +1914,10 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
         if not isinstance(body_params, dict):
             raise ValueError("VALIDATION_ERROR")
         params.update(body_params)
+    if context.output_mode == "encrypted":
+        if processing_path not in {"/internal/region-hourly", "/internal/resource-query"}:
+            raise _homomorphic_denied("HOMOMORPHIC_UNSUPPORTED", context)
+        return await execute_homomorphic_resource_request(params, context, processing_path)
     if processing_path == "/internal/active-power":
         rows, meta = detail_measurements(params, context)
         meta.update(
@@ -1292,6 +1960,14 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
 
 def record_allowed(context: RuntimeContext, returned_rows: int, duration_ms: int) -> None:
     now = datetime.now(timezone.utc)
+    snapshot = _policy_runtime_snapshot(context.policy)
+    evidence = {
+        "matchedLabels": list(context.matched_labels),
+        "riskFactors": list(context.risk_factors),
+        "runtimeConfigVersion": context.policy.get("gateway_config_version"),
+        "labelSnapshotVersion": context.label_snapshot_version,
+        "hardConstraints": _json_object(snapshot.get("hardConstraints")),
+    }
     execute(
         """
         INSERT INTO security_policy_decision_logs (
@@ -1299,13 +1975,13 @@ def record_allowed(context: RuntimeContext, returned_rows: int, duration_ms: int
           requested_output_mode, effective_output_mode, decision_result,
           decision_reason_code, decision_reason, risk_score, risk_level,
           client_ip, query_days, requested_rows, returned_rows, response_status,
-          response_bytes, duration_ms, requested_at, "createdAt", "updatedAt"
+          response_bytes, duration_ms, applied_limits_json, requested_at, "createdAt", "updatedAt"
         ) VALUES (
           %(request_id)s, %(subject_id)s, %(api_id)s, %(policy_id)s,
           %(output_mode)s, %(output_mode)s, 'allow', 'POLICY_ALLOW',
           '请求通过已发布访问策略校验', %(risk_score)s, %(risk_level)s,
           %(client_ip)s, %(query_days)s, %(requested_rows)s, %(returned_rows)s,
-          200, 0, %(duration_ms)s, %(now)s, %(now)s, %(now)s
+          200, 0, %(duration_ms)s, %(evidence)s::jsonb, %(now)s, %(now)s, %(now)s
         ) ON CONFLICT (request_id) DO NOTHING
         """,
         {
@@ -1321,6 +1997,7 @@ def record_allowed(context: RuntimeContext, returned_rows: int, duration_ms: int
             "requested_rows": context.requested_rows,
             "returned_rows": returned_rows,
             "duration_ms": max(0, duration_ms),
+            "evidence": json.dumps(evidence, ensure_ascii=False),
             "now": now,
         },
     )
@@ -1328,6 +2005,14 @@ def record_allowed(context: RuntimeContext, returned_rows: int, duration_ms: int
 
 def record_denied(error: RuntimeDenied, duration_ms: int) -> None:
     now = datetime.now(timezone.utc)
+    snapshot = _policy_runtime_snapshot(error.policy or {})
+    evidence = {
+        "matchedLabels": error.matched_labels,
+        "riskFactors": error.risk_factors,
+        "runtimeConfigVersion": error.policy.get("gateway_config_version") if error.policy else None,
+        "labelSnapshotVersion": error.label_snapshot_version,
+        "hardConstraints": _json_object(snapshot.get("hardConstraints")),
+    }
     with connection() as current, current.cursor() as cursor:
         cursor.execute(
             """
@@ -1336,13 +2021,13 @@ def record_denied(error: RuntimeDenied, duration_ms: int) -> None:
               requested_output_mode, effective_output_mode, decision_result,
               decision_reason_code, decision_reason, risk_score, risk_level,
               client_ip, query_days, requested_rows, returned_rows, response_status,
-              response_bytes, duration_ms, requested_at, "createdAt", "updatedAt"
+              response_bytes, duration_ms, applied_limits_json, requested_at, "createdAt", "updatedAt"
             ) VALUES (
               %(request_id)s, %(subject_id)s, %(api_id)s, %(policy_id)s,
               %(output_mode)s, %(output_mode)s, 'deny', %(reason_code)s,
               %(reason)s, %(risk_score)s, %(risk_level)s, %(client_ip)s,
               %(query_days)s, %(requested_rows)s, 0, %(response_status)s,
-              0, %(duration_ms)s, %(now)s, %(now)s, %(now)s
+              0, %(duration_ms)s, %(evidence)s::jsonb, %(now)s, %(now)s, %(now)s
             ) ON CONFLICT (request_id) DO NOTHING RETURNING id
             """,
             {
@@ -1360,6 +2045,7 @@ def record_denied(error: RuntimeDenied, duration_ms: int) -> None:
                 "requested_rows": error.requested_rows,
                 "response_status": error.status,
                 "duration_ms": max(0, duration_ms),
+                "evidence": json.dumps(evidence, ensure_ascii=False),
                 "now": now,
             },
         )
@@ -1604,6 +2290,9 @@ def ensure_resource_api(resource_id: int) -> dict[str, Any]:
         "gateway_path": f"/data-api/resources/{token.lower()}",
         "data_source_id": source_id,
         "runtime_config_json": runtime_config,
+        "protection_level": str(resource.get("protection_level") or "l2"),
+        "supports_homomorphic": bool(existing and existing.get("supports_homomorphic"))
+        or str(resource.get("protection_level") or "").lower() == "l3",
     }
     now = datetime.now(timezone.utc)
     if not existing:
@@ -1617,7 +2306,7 @@ def ensure_resource_api(resource_id: int) -> dict[str, Any]:
               "createdAt", "updatedAt"
             ) VALUES (
               %(api_code)s, %(api_name)s, 'develop', 'GET', NULL, '/internal/resource-query',
-              %(gateway_path)s, 'l2', true, true, false, false, 'draft', 0,
+              %(gateway_path)s, %(protection_level)s, true, true, false, %(supports_homomorphic)s, 'draft', 0,
               'unpublished', NULL, %(resource_id)s, %(data_source_id)s, %(runtime_config)s::jsonb,
               %(now)s, %(now)s
             ) RETURNING *
@@ -1632,7 +2321,7 @@ def ensure_resource_api(resource_id: int) -> dict[str, Any]:
         return {"id": int(row["id"]), "created": True, "publishStatus": row.get("publish_status")}
 
     config_changed = _json_object(existing.get("runtime_config_json")) != runtime_config
-    identity_changed = any(str(existing.get(key) or "") != str(desired[key]) for key in ("api_code", "api_name", "gateway_path", "data_source_id"))
+    identity_changed = any(str(existing.get(key) or "") != str(desired[key]) for key in ("api_code", "api_name", "gateway_path", "data_source_id", "protection_level", "supports_homomorphic"))
     if config_changed or identity_changed:
         fetch_one(
             """
@@ -1640,6 +2329,7 @@ def ensure_resource_api(resource_id: int) -> dict[str, Any]:
             SET api_code=%(api_code)s, api_name=%(api_name)s, access_mode='develop', http_method='GET',
                 upstream_url=NULL, orchestrator_path='/internal/resource-query', gateway_path=%(gateway_path)s,
                 data_source_id=%(data_source_id)s, runtime_config_json=%(runtime_config)s::jsonb,
+                protection_level=%(protection_level)s, supports_homomorphic=%(supports_homomorphic)s,
                 api_status='draft', publish_status='unpublished', publish_error=NULL, "updatedAt"=%(now)s
             WHERE id=%(id)s
             RETURNING *
@@ -1687,23 +2377,33 @@ def publish_policy(policy_id: int) -> dict[str, Any]:
     )
     if not policy:
         raise LookupError("访问策略不存在")
+    grouped_scope = str(policy.get("access_scope") or "resource") == "label_group"
     errors = []
     for field, label in [
         ("policy_code", "策略编码"),
         ("scenario", "使用场景"),
         ("subject_id", "访问主体"),
-        ("api_resource_id", "API 资源"),
         ("output_mode", "输出模式"),
     ]:
         if not policy.get(field):
             errors.append(f"{label}不能为空")
+    if not grouped_scope:
+        if not policy.get("resource_id"):
+            errors.append("数据资源不能为空")
+        if not policy.get("api_resource_id"):
+            errors.append("API 资源不能为空")
     if policy.get("subject_status") != "enabled":
         errors.append("访问主体未启用")
-    if policy.get("api_status") != "enabled" or policy.get("api_publish_status") != "success":
+    if not grouped_scope and (policy.get("api_status") != "enabled" or policy.get("api_publish_status") != "success"):
         errors.append("API 资源尚未发布")
     allowed_api_codes = {str(item).strip().upper() for item in _json_list(policy.get("allowed_api_codes_json"))}
-    if "*" not in allowed_api_codes and str(policy.get("api_code") or "").strip().upper() not in allowed_api_codes:
+    if not allowed_api_codes:
+        errors.append("访问主体的 API 授权清单不能为空")
+    elif not grouped_scope and "*" not in allowed_api_codes and str(policy.get("api_code") or "").strip().upper() not in allowed_api_codes:
         errors.append("访问主体尚未在 API 授权清单中包含当前 API")
+    selector = policy_label_selector(policy) if grouped_scope else {}
+    if grouped_scope and not any(policy_selector_conditions(selector)):
+        errors.append("标签组合策略至少需要一个分类、分级、防护层或标签条件")
     if int(policy.get("max_requests_per_minute") or 0) <= 0:
         errors.append("每分钟请求上限必须大于 0")
     if not 1 <= int(policy.get("max_query_days") or 0) <= 31:
@@ -1740,20 +2440,61 @@ def publish_policy(policy_id: int) -> dict[str, Any]:
         raise ValueError("；".join(errors))
     version = int(policy.get("policy_version") or 0) + 1
     config_version = f"runtime-v{version}-{now.strftime('%Y%m%d%H%M%S')}"
+    if grouped_scope:
+        selected_tags = set(_normalized_tags(selector.get("resourceTags")))
+        selected_levels = {str(item).lower() for item in _json_list(selector.get("protectionLevels"))}
+        constraints = {
+            "aggregateOnly": "l1" in selected_levels or "仅聚合" in selected_tags,
+            "encryptedOnly": "l3" in selected_levels or "仅密态" in selected_tags,
+            "exportForbidden": "禁止导出" in selected_tags,
+            "maskedFields": [],
+        }
+        snapshot = {
+            "version": config_version,
+            "scope": "label_group",
+            "selector": selector,
+            "matchedLabels": list(selector.get("resourceTags") or []),
+            "hardConstraints": constraints,
+        }
+    else:
+        snapshot = build_policy_runtime_snapshot(policy, config_version)
+        constraints = _json_object(snapshot.get("hardConstraints"))
+    output_mode = str(policy.get("output_mode") or "detail")
+    if constraints.get("aggregateOnly") and output_mode != "aggregate":
+        errors.append("当前数据资源标签要求访问策略仅输出聚合结果")
+    if constraints.get("encryptedOnly") and output_mode != "encrypted":
+        errors.append("当前数据资源标签要求访问策略仅输出密态结果")
+    if errors:
+        execute(
+            "UPDATE eco_resource_security_policies SET publish_status='failed', publish_error=%(error)s, \"updatedAt\"=%(now)s WHERE id=%(id)s",
+            {"id": policy_id, "error": "；".join(errors), "now": now},
+        )
+        raise ValueError("；".join(errors))
+    policy_detail = _json_object(policy.get("policy_detail_json"))
+    policy_detail["runtimeSnapshot"] = snapshot
     execute(
         """
         UPDATE eco_resource_security_policies
         SET policy_status='enabled', publish_status='success', policy_version=%(version)s,
             gateway_config_version=%(config_version)s, published_at=%(now)s,
+            policy_detail_json=%(policy_detail)s::jsonb,
             publish_error=NULL, "updatedAt"=%(now)s
         WHERE id=%(id)s
         """,
-        {"id": policy_id, "version": version, "config_version": config_version, "now": now},
+        {
+            "id": policy_id,
+            "version": version,
+            "config_version": config_version,
+            "policy_detail": json.dumps(policy_detail, ensure_ascii=False),
+            "now": now,
+        },
     )
     return {
         "id": policy_id,
         "publishStatus": "success",
         "policyVersion": version,
         "runtimeConfigVersion": config_version,
+        "labelSnapshotVersion": config_version,
+        "matchedLabels": snapshot.get("matchedLabels", []),
         "publishedAt": now.isoformat(),
     }

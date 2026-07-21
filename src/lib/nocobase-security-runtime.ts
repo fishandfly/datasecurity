@@ -63,6 +63,11 @@ type RawConfidentialTask = Record<string, unknown> & {
   progress?: number | string | null
   workflow_instance_id?: string | null
   task_tags?: unknown
+  operation?: string | null
+  measure_field_code?: string | null
+  sample_count?: number | string | null
+  region_scope_json?: unknown
+  organization_scope_json?: unknown
   execution_summary_json?: unknown
   createdAt?: string | null
   updatedAt?: string | null
@@ -155,7 +160,7 @@ export type EditableSecurityDataSource = Omit<SecurityDataSourceRecord, 'id' | '
   id?: string
 }
 
-export type SecurityRuntimeLogStage = 'created' | 'queued' | 'health_check' | 'encrypt' | 'compute' | 'result' | 'failed'
+export type SecurityRuntimeLogStage = 'created' | 'queued' | 'validation' | 'resource_read' | 'health_check' | 'encrypt' | 'compute' | 'result' | 'failed'
 export type SecurityRuntimeLogResult = 'success' | 'pending' | 'failed'
 
 export type SecurityRuntimeLog = {
@@ -192,6 +197,11 @@ export type ConfidentialTaskRecord = {
   workflowInstanceId: string
   tags: string[]
   resourceIds: string[]
+  operation: OpenFheOperation | null
+  fieldCode: string
+  sampleCount: number
+  regionScope: string[]
+  organizationScope: string[]
   computeRequest: OpenFheComputeRequest | null
   executionSummary: Record<string, unknown>
   logs: SecurityRuntimeLog[]
@@ -454,7 +464,7 @@ function parseRuntimeLogs(value: unknown): SecurityRuntimeLog[] {
     return {
       id: normalizeText(row.id) || `runtime-log-${index + 1}`,
       time: normalizeText(row.time),
-      stage: ['created', 'queued', 'health_check', 'encrypt', 'compute', 'result', 'failed'].includes(stage) ? stage : 'queued',
+      stage: ['created', 'queued', 'validation', 'health_check', 'encrypt', 'compute', 'result', 'failed'].includes(stage) ? stage : 'queued',
       result: ['success', 'pending', 'failed'].includes(result) ? result : 'pending',
       message: sanitizeVisibleRuntimeText(row.message),
       durationMs: nullableMetric(row.durationMs ?? row.duration_ms),
@@ -561,6 +571,11 @@ function mapTaskRecord(raw: RawConfidentialTask, labels: Map<string, string>): C
     workflowInstanceId: normalizeText(raw.workflow_instance_id),
     tags: normalizeStringArray(raw.task_tags),
     resourceIds: normalizeStringArray(summary.resourceIds ?? summary.resource_ids),
+    operation: normalizeText(raw.operation) === 'mean' ? 'mean' : normalizeText(raw.operation) === 'sum' ? 'sum' : null,
+    fieldCode: normalizeText(raw.measure_field_code ?? summary.fieldCode ?? summary.field_code),
+    sampleCount: Math.max(0, normalizeNumber(raw.sample_count ?? summary.sampleCount ?? summary.sample_count)),
+    regionScope: normalizeStringArray(raw.region_scope_json),
+    organizationScope: normalizeStringArray(raw.organization_scope_json),
     computeRequest: parseOpenFheComputeRequest(summary.computeRequest ?? summary.compute_request),
     executionSummary: summary,
     logs: parseRuntimeLogs(summary.logs),
@@ -709,7 +724,8 @@ export async function fetchConfidentialTasks() {
 export async function createConfidentialTask(record: EditableConfidentialTask) {
   if (!record.name.trim()) throw new Error('请填写任务名称')
   if (!record.scenario.trim()) throw new Error('请填写业务场景')
-  if (record.resourceIds.length === 0) throw new Error('请至少选择一个量测数据资源')
+  const resourceIds = Array.from(new Set(record.resourceIds.map((resourceId) => resourceId.trim()).filter(Boolean)))
+  if (resourceIds.length === 0) throw new Error('请至少选择一个量测数据资源')
   validateOpenFheComputeRequest(record.algorithm, record.computeRequest)
   const taskCode = `HE-${Date.now()}`
   const createdLog = createRuntimeLog('created', 'success', `已创建${formatOpenFheAlgorithm(record.algorithm)}同态加密任务`)
@@ -725,19 +741,22 @@ export async function createConfidentialTask(record: EditableConfidentialTask) {
       target_domain: record.targetDomain,
       owner_user_id: record.ownerUserId || null,
       progress: 0,
+      operation: record.computeRequest.operation,
+      sample_count: record.computeRequest.values.length,
       task_tags: Array.from(new Set([...record.tags, formatOpenFheAlgorithm(record.algorithm)])),
       execution_summary_json: {
         engine: 'homomorphic-engine',
         algorithm: record.algorithm,
-        resourceIds: record.resourceIds,
+        resourceIds,
         computeRequest: record.computeRequest,
+        events: [createdLog],
         logs: [createdLog],
       },
     },
   })
   const payload = response.data as { data?: { id?: number | string }; id?: number | string }
   const taskId = normalizeText(payload.data?.id ?? payload.id)
-  await Promise.all(record.resourceIds.map((resourceId, index) => (
+  await Promise.all(resourceIds.map((resourceId, index) => (
     nocobaseClient.resource(CONFIDENTIAL_TASK_RESOURCE_COLLECTION).create({
       values: {
         task_id: taskId,
@@ -749,6 +768,23 @@ export async function createConfidentialTask(record: EditableConfidentialTask) {
     })
   )))
   return taskId
+}
+
+export async function approveConfidentialTask(task: ConfidentialTaskRecord) {
+  if (task.status !== 'pending_approval') throw new Error('只有待审批任务可以审批')
+  const approvedLog = createRuntimeLog('validation', 'success', '任务范围与计算参数已通过审批')
+  const logs = [...task.logs, approvedLog]
+  await nocobaseClient.resource(CONFIDENTIAL_TASK_COLLECTION).update({
+    filterByTk: task.id,
+    values: {
+      task_status: 'approved',
+      execution_summary_json: {
+        ...task.executionSummary,
+        events: logs,
+        logs,
+      },
+    },
+  })
 }
 
 export async function fetchOpenFheEngineConfig(): Promise<OpenFheEngineConfig> {
@@ -848,7 +884,7 @@ export async function executeOpenFheTask(task: ConfidentialTaskRecord, config: O
     values: {
       task_status: 'running',
       progress: 10,
-      execution_summary_json: { ...task.executionSummary, engine: 'homomorphic-engine', algorithm: task.algorithm, logs },
+      execution_summary_json: { ...task.executionSummary, engine: 'homomorphic-engine', algorithm: task.algorithm, events: logs, logs },
     },
   })
 
@@ -883,12 +919,16 @@ export async function executeOpenFheTask(task: ConfidentialTaskRecord, config: O
       values: {
         task_status: 'completed',
         progress: 100,
+        operation: task.computeRequest.operation,
+        sample_count: task.computeRequest.values.length,
+        duration_ms: durationMs,
         execution_summary_json: {
           ...task.executionSummary,
           engine: 'homomorphic-engine',
           algorithm: task.algorithm,
           resourceIds: task.resourceIds,
           result: payload,
+          events: [...logs, resultLog],
           logs: [...logs, resultLog],
         },
       },
@@ -903,7 +943,8 @@ export async function executeOpenFheTask(task: ConfidentialTaskRecord, config: O
       values: {
         task_status: 'failed',
         progress: 0,
-        execution_summary_json: { ...task.executionSummary, engine: 'homomorphic-engine', algorithm: task.algorithm, logs: [...logs, failedLog] },
+        duration_ms: durationMs,
+        execution_summary_json: { ...task.executionSummary, engine: 'homomorphic-engine', algorithm: task.algorithm, events: [...logs, failedLog], logs: [...logs, failedLog] },
       },
     })
     throw new Error(message)
