@@ -8,13 +8,13 @@ services:
     restart: unless-stopped
     depends_on:
       app:
-        condition: service_started
+        condition: service_healthy
       openfhe:
         condition: service_healthy
       security-runtime:
         condition: service_healthy
     ports:
-      - "5173:80"
+      - "${FRONTEND_PORT:-5173}:80"
     networks:
       - nocobase
 
@@ -27,7 +27,9 @@ services:
       postgres:
         condition: service_healthy
       app:
-        condition: service_started
+        condition: service_healthy
+      init-data:
+        condition: service_completed_successfully
       openfhe:
         condition: service_healthy
     environment:
@@ -43,7 +45,7 @@ services:
         {"secret://security/source/src-yc20-001":"${POSTGRES_PASSWORD:?请配置数据源凭据}","secret://security/source/src-ems-001":"${POSTGRES_PASSWORD}","secret://security/source/src-tmr-001":"${POSTGRES_PASSWORD}","secret://security/source/src-distribution-001":"${POSTGRES_PASSWORD}","secret://security/source/src-cable-001":"${POSTGRES_PASSWORD}","secret://security/source/src-weather-001":"${POSTGRES_PASSWORD}","secret://security/source/src-hvcable-001":"${POSTGRES_PASSWORD}","secret://security/source/mysql-validation":"${MYSQL_VALIDATION_PASSWORD:-}"}
       TZ: Asia/Shanghai
     ports:
-      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:${SECURITY_RUNTIME_PORT:-8090}:8090"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=5)"]
       interval: 15s
@@ -62,7 +64,7 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "127.0.0.1:8088:8088"
+      - "127.0.0.1:${OPENFHE_PORT:-8088}:8088"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/health', timeout=5)"]
       interval: 15s
@@ -76,6 +78,7 @@ services:
     image: nocobase/nocobase:2.1.21-full
     restart: always
     init: true
+    command: ["/bin/sh", "/usr/local/bin/security-app-entrypoint.sh"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,11 +90,53 @@ services:
       DB_DATABASE: nocobase
       DB_USER: nocobase
       DB_PASSWORD: ${POSTGRES_PASSWORD:?请在 docker/.env 配置数据库密码}
+      INIT_ROOT_USERNAME: ${NOCOBASE_ADMIN_ACCOUNT:-nocobase}
+      INIT_ROOT_EMAIL: ${NOCOBASE_ADMIN_EMAIL:-admin@nocobase.com}
+      INIT_ROOT_PASSWORD: ${NOCOBASE_ADMIN_PASSWORD:-admin123}
+      INIT_ROOT_NICKNAME: ${NOCOBASE_ADMIN_NICKNAME:-Super Admin}
       TZ: Asia/Shanghai
     volumes:
       - ./storage:/app/nocobase/storage
+      - ./app/plugins:/plugins:ro
+      - ./app/scripts/security-app-entrypoint.sh:/usr/local/bin/security-app-entrypoint.sh:ro
     ports:
-      - "8196:80"
+      - "${NOCOBASE_PORT:-8196}:80"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:80/api/app:getInfo').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks:
+      - nocobase
+
+  init-data:
+    image: node:20-alpine
+    restart: "no"
+    init: true
+    working_dir: /init
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      NOCOBASE_API_BASE_URL: http://app/api/
+      NOCOBASE_ADMIN_ACCOUNT: ${NOCOBASE_ADMIN_ACCOUNT:-nocobase}
+      NOCOBASE_ADMIN_PASSWORD: ${NOCOBASE_ADMIN_PASSWORD:-admin123}
+      NOCOBASE_AUTHENTICATOR: basic
+      FORCE_REINIT: ${FORCE_REINIT:-false}
+      DB_DIALECT: postgres
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: nocobase
+      DB_USER: nocobase
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?请在 docker/.env 配置数据库密码}
+    volumes:
+      - ../scripts:/init/scripts:ro
+      - ../package.json:/init/package.json:ro
+      - ../package-lock.json:/init/package-lock.json:ro
+      - ./v3.0/initdb/04-init-dictionary-views.sql:/init/dictionary-views.sql:ro
+      - ./storage/init:/init/state
+    entrypoint: ["/bin/sh", "/init/scripts/docker-init-v31.sh"]
     networks:
       - nocobase
 
