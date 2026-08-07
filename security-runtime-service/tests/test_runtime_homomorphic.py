@@ -11,6 +11,7 @@ from app.runtime import (
     RuntimeDenied,
     _homomorphic_values,
     execute_homomorphic_resource_request,
+    record_runtime_engine_exception,
 )
 
 
@@ -91,6 +92,52 @@ def test_resource_query_values_are_read_from_selected_field_and_limited_in_memor
     assert values == [10.25, 20.5]
     assert query.call_args.args[0]["fields"] == "ACTIVE_POWER_KW"
     assert query.call_args.args[0]["pageSize"] == 65
+
+
+def test_resource_validation_failure_stops_homomorphic_processing():
+    denied = RuntimeDenied(
+        "INGEST_VALIDATION_FAILED",
+        request_id="REQ-RESOURCE-HE-001",
+        api=context().api,
+        subject=context().subject,
+        policy=context().policy,
+    )
+    with patch("app.runtime.resource_query", side_effect=denied):
+        with pytest.raises(RuntimeDenied) as caught:
+            _homomorphic_values({}, context(), "/internal/resource-query", "ACTIVE_POWER_KW")
+
+    assert caught.value.code == "INGEST_VALIDATION_FAILED"
+
+
+def test_runtime_engine_exception_records_ingest_and_early_homomorphic_failures():
+    current = context()
+    current = RuntimeContext(
+        **{
+            **current.__dict__,
+            "api": {**current.api, "data_source_id": 9, "resource_id": 8},
+        }
+    )
+    denied = RuntimeDenied(
+        "UPSTREAM_UNAVAILABLE",
+        request_id=current.request_id,
+        api=current.api,
+        subject=current.subject,
+        policy=current.policy,
+    )
+    statements = []
+    with patch("app.runtime.fetch_one", return_value=None), \
+         patch("app.runtime.execute", side_effect=lambda statement, parameters=None: statements.append((statement, parameters or {})) or 1):
+        record_runtime_engine_exception(denied, 25)
+
+    assert len(statements) == 2
+    ingest_statement, ingest_parameters = statements[0]
+    homomorphic_statement, homomorphic_parameters = statements[1]
+    assert "INSERT INTO security_ingest_logs" in ingest_statement
+    assert ingest_parameters["error_summary"] == "上游数据服务暂不可用"
+    assert "INSERT INTO security_confidential_tasks" in homomorphic_statement
+    assert homomorphic_parameters["error_summary"] == "上游数据服务暂不可用"
+    assert '"failureCode": "UPSTREAM_UNAVAILABLE"' in homomorphic_parameters["summary"]
+    assert "values" not in homomorphic_parameters["summary"]
 
 
 @pytest.mark.parametrize(

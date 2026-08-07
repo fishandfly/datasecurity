@@ -10,6 +10,8 @@ const resourceAccessSubjectsPanelSource = readFileSync(resolve(process.cwd(), 's
 const resourceBehaviorBaselineDialogSource = readFileSync(resolve(process.cwd(), 'src/components/resource-behavior-baseline-dialog.tsx'), 'utf8')
 const resourceAccessSubjectsSource = readFileSync(resolve(process.cwd(), 'src/lib/resource-access-subjects.ts'), 'utf8')
 const resourcePhysicalTablePanelSource = readFileSync(resolve(process.cwd(), 'src/components/resource-physical-table-panel.tsx'), 'utf8')
+const resourceIngestValidationDialogSource = readFileSync(resolve(process.cwd(), 'src/components/resource-ingest-validation-dialog.tsx'), 'utf8')
+const resourceIngestValidationSource = readFileSync(resolve(process.cwd(), 'src/lib/resource-ingest-validation.ts'), 'utf8')
 const resourceEditDialogSource = readFileSync(resolve(process.cwd(), 'src/components/resource-edit-dialog.tsx'), 'utf8')
 const resourceEditSource = readFileSync(resolve(process.cwd(), 'src/lib/nocobase-resource-edit.ts'), 'utf8')
 const runtimeClientSource = readFileSync(resolve(process.cwd(), 'src/lib/security-runtime-client.ts'), 'utf8')
@@ -18,6 +20,7 @@ const homomorphicPanelSource = readFileSync(resolve(process.cwd(), 'src/componen
 const collectionPageSource = readFileSync(resolve(process.cwd(), 'src/components/security-v3-collection-page.tsx'), 'utf8')
 const moduleTabsSource = readFileSync(resolve(process.cwd(), 'src/components/security-module-tabs.tsx'), 'utf8')
 const relationSource = readFileSync(resolve(process.cwd(), 'src/lib/resource-security-relations.ts'), 'utf8')
+const securityV3PagesSource = readFileSync(resolve(process.cwd(), 'src/pages/security-v3-pages.tsx'), 'utf8')
 
 test('安全管控详情页支持返回原列表并兜底跳回数据资源列表', () => {
   assert.match(detailPageSource, /type SecurityGovernanceDetailLocationState = \{/)
@@ -97,7 +100,7 @@ test('安全管控详情页使用 tab 展示并将当前 tab 写入 URL', () => 
   assert.match(detailPageSource, /\['resourceFields', '资源字段'\]/)
   assert.match(detailPageSource, /\['physicalTable', '接入规则'\]/)
   assert.match(detailPageSource, /\['apiInfo', 'API 信息'\]/)
-  assert.match(detailPageSource, /\['accessSubjects', '访问主体'\]/)
+  assert.match(detailPageSource, /\['accessSubjects', '数据应用'\]/)
   assert.match(detailPageSource, /\['accessPolicies', '访问策略'\]/)
   assert.match(detailPageSource, /\['homomorphic', '同态加密'\]/)
   assert.doesNotMatch(detailPageSource, /\['accessInfo', '安全接入'\]/)
@@ -122,7 +125,7 @@ test('资源详情 tab 在亮色背景下保持可读对比度', () => {
   assert.match(detailPageSource, /aria-selected=\{activeTab === key\}/)
 })
 
-test('资源详情访问主体 tab 直接维护当前唯一 API 的主体授权', () => {
+test('资源详情数据应用 tab 直接维护当前唯一 API 的主体授权', () => {
   assert.match(detailPageSource, /activeTab === 'accessSubjects'/)
   assert.match(detailPageSource, /<ResourceAccessSubjectsPanel resourceId=\{String\(item\.id\)\} canManage=\{canManageResources\}/)
   assert.match(resourceAccessSubjectsPanelSource, /ensureDefaultSecurityApi\(resourceId\)/)
@@ -130,8 +133,8 @@ test('资源详情访问主体 tab 直接维护当前唯一 API 的主体授权'
   assert.match(resourceAccessSubjectsPanelSource, /hasApiAuthorization\(subject\.allowed_api_codes_json, apiCode\)/)
   assert.match(resourceAccessSubjectsPanelSource, /updateSecurityV3Record\('security_access_subjects', subjectId/)
   assert.match(resourceAccessSubjectsPanelSource, /allowed_api_codes_json: allowedApiCodes/)
-  assert.match(resourceAccessSubjectsPanelSource, /添加访问主体/)
-  assert.match(resourceAccessSubjectsPanelSource, /已授权访问主体/)
+  assert.match(resourceAccessSubjectsPanelSource, /添加数据应用/)
+  assert.match(resourceAccessSubjectsPanelSource, /已授权数据应用/)
   assert.match(resourceAccessSubjectsPanelSource, /取消授权/)
   assert.match(resourceAccessSubjectsPanelSource, /确认取消/)
   assert.match(resourceAccessSubjectsPanelSource, /保留授权/)
@@ -245,6 +248,24 @@ test('接入规则的数据源信息以单行全宽卡片横向铺开', () => {
   assert.match(detailPageSource, /title="接入规则"/)
   assert.match(detailPageSource, /securityRelations\.sources\.map[\s\S]*mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4/)
   assert.doesNotMatch(detailPageSource, /mt-5 grid gap-4 xl:grid-cols-2[\s\S]*securityRelations\.sources\.map/)
+})
+
+test('数据资源可配置覆盖数据源默认值的接入校验规则', () => {
+  assert.match(detailPageSource, /配置资源校验/)
+  assert.match(detailPageSource, /<ResourceIngestValidationDialog/)
+  assert.match(resourceIngestValidationDialogSource, /继承数据源字段校验规则/)
+  assert.match(resourceIngestValidationDialogSource, /按资源摘要字段校验/)
+  assert.match(resourceIngestValidationDialogSource, /摘要字段/)
+  assert.match(resourceIngestValidationDialogSource, /参与摘要的字段/)
+  assert.match(resourceIngestValidationDialogSource, /拒绝该记录/)
+  assert.match(resourceIngestValidationDialogSource, /createPortal/)
+  assert.match(resourceIngestValidationDialogSource, /document\.body/)
+  assert.match(resourceIngestValidationSource, /stat_base:/)
+  assert.match(resourceIngestValidationSource, /ingest_validation: config/)
+  assert.match(resourcePhysicalTablePanelSource, /resource.*资源级规则已生效/s)
+  assert.match(resourcePhysicalTablePanelSource, /integrityExecutable/)
+  assert.match(securityV3PagesSource, /resource_delivery_validation: '资源交付校验'/)
+  assert.match(securityV3PagesSource, /value: 'warning', label: '告警放行'/)
 })
 
 test('资源字段移除未进入策略与同态运行链路的展示型安全字段', () => {

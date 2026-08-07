@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 import math
 import re
 import time
@@ -81,8 +82,10 @@ DENIALS = {
     "SCOPE_VIOLATION": (403, "请求的数据范围不在授权范围内", 80),
     "RATE_LIMITED": (429, "调用频率超过授权限制", 70),
     "VALIDATION_ERROR": (400, "请求参数不符合要求", 60),
+    "INTERNAL_ERROR": (500, "服务处理失败", 60),
     "ROUTE_NOT_FOUND": (404, "数据服务未发布或已停用", 40),
     "UPSTREAM_UNAVAILABLE": (502, "上游数据服务暂不可用", 50),
+    "INGEST_VALIDATION_FAILED": (422, "源端数据未通过接入完整性校验", 80),
     "HOMOMORPHIC_UNSUPPORTED": (422, "当前数据 API 未声明同态计算能力", 60),
     "HOMOMORPHIC_FIELD_INVALID": (422, "同态计算字段必须是数值类型", 60),
     "HOMOMORPHIC_NO_DATA": (422, "授权范围内没有可用的数值数据", 40),
@@ -565,6 +568,19 @@ def build_resource_runtime_config(api: dict[str, Any]) -> tuple[dict[str, Any], 
             return configured_code
         return next((code for code in field_map if any(marker in code for marker in markers)), "")
 
+    configured_scales = _json_object(
+        configured.get("scales") or configured.get("scaleColumns") or configured.get("scale_columns")
+    )
+    scales: dict[str, float] = {}
+    for code, value in configured_scales.items():
+        if not str(code).strip():
+            continue
+        try:
+            scale_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if scale_value != 1:
+            scales[str(code).strip().upper()] = scale_value
     return {
         "version": 1,
         "dialect": dialect,
@@ -572,6 +588,7 @@ def build_resource_runtime_config(api: dict[str, Any]) -> tuple[dict[str, Any], 
         "fieldMap": field_map,
         "defaultFields": default_fields,
         "maskFields": mask_fields,
+        "scales": scales,
         "timeFieldCode": configured_or_detect("timeFieldCode", "time_field_code", ("TIME", "DATE")),
         "regionFieldCode": configured_or_detect("regionFieldCode", "region_field_code", ("REGION",)),
         "organizationFieldCode": configured_or_detect("organizationFieldCode", "organization_field_code", ("ORGANIZATION", "ORG_CODE")),
@@ -614,7 +631,300 @@ def verify_resource_runtime_config(api: dict[str, Any]) -> None:
             cursor.execute(f"SELECT {columns} FROM {table_name} LIMIT 0")
 
 
+def _config_enabled(config: dict[str, Any], camel_name: str, snake_name: str, default: bool = False) -> bool:
+    value = config.get(camel_name) if camel_name in config else config.get(snake_name, default)
+    return value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _unique_ingest_fields(*values: object) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for item in _json_list(value):
+            field_name = str(item).strip()
+            normalized = field_name.upper()
+            if field_name and normalized not in seen:
+                seen.add(normalized)
+                result.append(field_name)
+    return result
+
+
+def resolve_resource_ingest_validation(resource: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+    security_config = _json_object(source.get("security_config_json"))
+    source_validation_rules = _json_object(source.get("validation_rules_json"))
+    stat_base = _json_object(resource.get("stat_base"))
+    resource_validation = _json_object(
+        stat_base.get("ingest_validation") or stat_base.get("ingestValidation")
+    )
+
+    sampling_enabled = _config_enabled(security_config, "samplingEnabled", "sampling_enabled")
+    try:
+        sampling_rate = float(
+            security_config.get("samplingRate")
+            or security_config.get("sampling_rate")
+            or 100
+        )
+    except (TypeError, ValueError):
+        sampling_rate = 100
+    if _config_enabled(resource_validation, "samplingOverride", "sampling_override"):
+        sampling_enabled = _config_enabled(
+            resource_validation,
+            "samplingEnabled",
+            "sampling_enabled",
+            True,
+        )
+        try:
+            sampling_rate = float(
+                resource_validation.get("samplingRate")
+                or resource_validation.get("sampling_rate")
+                or 100
+            )
+        except (TypeError, ValueError):
+            sampling_rate = 100
+    sampling_rate = min(max(sampling_rate, 1), 100)
+
+    inherit_source_rules = _config_enabled(
+        resource_validation,
+        "inheritSourceRules",
+        "inherit_source_rules",
+        True,
+    )
+    required_fields = _unique_ingest_fields(
+        source_validation_rules.get("required") if inherit_source_rules else [],
+        resource_validation.get("requiredFields") or resource_validation.get("required_fields"),
+    )
+    duplicate_keys = _unique_ingest_fields(
+        (
+            source_validation_rules.get("duplicateKeys")
+            or source_validation_rules.get("duplicate_keys")
+        ) if inherit_source_rules else [],
+        resource_validation.get("duplicateKeys") or resource_validation.get("duplicate_keys"),
+    )
+    source_numeric_ranges = _json_object(
+        source_validation_rules.get("numericRanges")
+        or source_validation_rules.get("numeric_ranges")
+    ) if inherit_source_rules else {}
+    numeric_ranges = {
+        **source_numeric_ranges,
+        **_json_object(
+            resource_validation.get("numericRanges")
+            or resource_validation.get("numeric_ranges")
+        ),
+    }
+
+    integrity_mode = str(
+        resource_validation.get("integrityMode")
+        or resource_validation.get("integrity_mode")
+        or "inherit"
+    ).strip().lower()
+    if integrity_mode == "disabled":
+        integrity_enabled = False
+        integrity_config_source = "resource"
+    elif integrity_mode == "digest_field":
+        integrity_enabled = True
+        integrity_config_source = "resource"
+    else:
+        integrity_mode = "inherit"
+        integrity_enabled = _config_enabled(security_config, "integrityEnabled", "integrity_enabled")
+        integrity_config_source = "source"
+
+    def configured_text(config: dict[str, Any], camel_name: str, snake_name: str, default: str = "") -> str:
+        return str(config.get(camel_name) or config.get(snake_name) or default).strip()
+
+    active_integrity_config = resource_validation if integrity_mode == "digest_field" else security_config
+    checksum_algorithm = configured_text(
+        active_integrity_config,
+        "checksumAlgorithm",
+        "checksum_algorithm",
+        "SM3",
+    ).upper()
+    checksum_algorithm = "SHA-256" if checksum_algorithm in {"SHA-256", "SHA256"} else "SM3"
+    digest_field = configured_text(active_integrity_config, "digestField", "digest_field")
+    checksum_fields = _unique_ingest_fields(
+        active_integrity_config.get("checksumFields")
+        or active_integrity_config.get("checksum_fields")
+    )
+    integrity_failure_action = configured_text(
+        active_integrity_config,
+        "integrityFailureAction",
+        "integrity_failure_action",
+        "reject",
+    ).lower()
+    integrity_failure_action = "warn" if integrity_failure_action == "warn" else "reject"
+    integrity_executable = integrity_enabled and bool(digest_field)
+
+    return {
+        "samplingEnabled": sampling_enabled,
+        "samplingRate": sampling_rate,
+        "configSource": "resource" if resource_validation else "source",
+        "inheritSourceRules": inherit_source_rules,
+        "integrityEnabled": integrity_enabled,
+        "integrityExecutable": integrity_executable,
+        "integrityMode": integrity_mode,
+        "integrityConfigSource": integrity_config_source,
+        "checksumAlgorithm": checksum_algorithm if integrity_enabled else "",
+        "digestField": digest_field,
+        "checksumFields": checksum_fields,
+        "integrityFailureAction": integrity_failure_action,
+        "validationRule": {
+            "requiredFields": required_fields,
+            "numericRanges": numeric_ranges,
+            "duplicateKeys": duplicate_keys,
+        },
+    }
+
+
+def sample_ingest_rows(rows: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
+    if not config.get("samplingEnabled"):
+        return []
+    sample_size = math.ceil(len(rows) * float(config.get("samplingRate") or 100) / 100)
+    if sample_size >= len(rows):
+        return rows
+    if sample_size <= 0:
+        return []
+    sampled_indexes = [math.floor(index * len(rows) / sample_size) for index in range(sample_size)]
+    return [rows[index] for index in sampled_indexes]
+
+
+def validate_ingest_rows(
+    rows: list[dict[str, Any]],
+    columns: list[str],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    validation_rule = _json_object(config.get("validationRule"))
+    required_fields = _unique_ingest_fields(validation_rule.get("requiredFields"))
+    duplicate_keys = _unique_ingest_fields(validation_rule.get("duplicateKeys"))
+    numeric_ranges = _json_object(validation_rule.get("numericRanges"))
+    integrity_executable = config.get("integrityExecutable") is True
+    digest_field = str(config.get("digestField") or "").strip()
+    checksum_fields = _unique_ingest_fields(config.get("checksumFields"))
+    checksum_algorithm = str(config.get("checksumAlgorithm") or "SM3")
+    integrity_failure_action = str(config.get("integrityFailureAction") or "reject")
+
+    def row_lookup(row: dict[str, Any]) -> dict[str, Any]:
+        return {str(key).strip().upper(): value for key, value in row.items()}
+
+    def row_digest(lookup: dict[str, Any]) -> tuple[str, list[str]]:
+        selected_fields = checksum_fields or [
+            column for column in columns if column.upper() != digest_field.upper()
+        ]
+        missing_fields = [field for field in selected_fields if field.upper() not in lookup]
+        canonical = {
+            field.upper(): _json_value(lookup.get(field.upper()))
+            for field in selected_fields
+        }
+        serialized = json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if checksum_algorithm == "SHA-256":
+            digest = hashlib.sha256(serialized).hexdigest()
+        else:
+            digest = hashlib.new("sm3", serialized).hexdigest()
+        return digest, missing_fields
+
+    def normalized_digest(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        for prefix in ("sm3:", "sm3=", "sha-256:", "sha-256=", "sha256:", "sha256="):
+            if normalized.startswith(prefix):
+                return normalized[len(prefix):].strip()
+        return normalized
+
+    integrity_results: list[bool | None] = [None for _ in rows]
+    warnings_by_row: list[list[str]] = [[] for _ in rows]
+    issues_by_row: list[list[str]] = [[] for _ in rows]
+    duplicate_groups: dict[tuple[Any, ...], list[int]] = {}
+    for row_index, row in enumerate(rows):
+        lookup = row_lookup(row)
+        for field_name in required_fields:
+            value = lookup.get(field_name.upper())
+            if value is None or (isinstance(value, str) and not value.strip()):
+                issues_by_row[row_index].append(f"必填字段 {field_name} 为空或不存在")
+        for field_name, configured_range in numeric_ranges.items():
+            range_values = _json_list(configured_range)
+            normalized_field = str(field_name).upper()
+            if normalized_field not in lookup:
+                issues_by_row[row_index].append(f"数值范围字段 {field_name} 不存在")
+                continue
+            value = lookup.get(normalized_field)
+            if value in {None, ""} or len(range_values) < 2:
+                continue
+            try:
+                numeric_value = float(value)
+                minimum, maximum = float(range_values[0]), float(range_values[1])
+                if numeric_value < minimum or numeric_value > maximum:
+                    issues_by_row[row_index].append(
+                        f"{field_name} 超出范围 [{minimum:g}, {maximum:g}]"
+                    )
+            except (TypeError, ValueError):
+                issues_by_row[row_index].append(f"{field_name} 不是有效数值")
+        if duplicate_keys:
+            missing_duplicate_fields = [
+                field_name for field_name in duplicate_keys if field_name.upper() not in lookup
+            ]
+            if missing_duplicate_fields:
+                issues_by_row[row_index].append(
+                    f"重复键字段 {', '.join(missing_duplicate_fields)} 不存在"
+                )
+            else:
+                duplicate_value = tuple(lookup.get(field_name.upper()) for field_name in duplicate_keys)
+                if all(value is not None and value != "" for value in duplicate_value):
+                    duplicate_groups.setdefault(duplicate_value, []).append(row_index)
+        if integrity_executable:
+            expected_digest = normalized_digest(lookup.get(digest_field.upper()))
+            actual_digest, missing_digest_fields = row_digest(lookup)
+            if not expected_digest:
+                integrity_results[row_index] = False
+                integrity_issue = f"摘要字段 {digest_field} 为空或不存在"
+            elif missing_digest_fields:
+                integrity_results[row_index] = False
+                integrity_issue = f"摘要参与字段 {', '.join(missing_digest_fields)} 不存在"
+            elif not hmac.compare_digest(actual_digest, expected_digest):
+                integrity_results[row_index] = False
+                integrity_issue = f"{checksum_algorithm} 完整性校验失败"
+            else:
+                integrity_results[row_index] = True
+                integrity_issue = ""
+            if integrity_issue:
+                if integrity_failure_action == "warn":
+                    warnings_by_row[row_index].append(integrity_issue)
+                else:
+                    issues_by_row[row_index].append(integrity_issue)
+
+    for duplicate_indexes in duplicate_groups.values():
+        if len(duplicate_indexes) <= 1:
+            continue
+        for row_index in duplicate_indexes:
+            issues_by_row[row_index].append(
+                f"重复键 {', '.join(duplicate_keys)} 在本次样本中重复"
+            )
+
+    validation_results = []
+    for index, issues in enumerate(issues_by_row):
+        result: dict[str, Any] = {"passed": not issues, "issues": issues}
+        if warnings_by_row[index]:
+            result["warnings"] = warnings_by_row[index]
+        if integrity_results[index] is not None:
+            result["integrityPassed"] = integrity_results[index]
+        validation_results.append(result)
+    passed_count = sum(1 for result in validation_results if result["passed"])
+    rejected_count = len(validation_results) - passed_count
+    return {
+        "sampleCount": len(rows),
+        "passedCount": passed_count,
+        "rejectedCount": rejected_count,
+        "warningCount": sum(len(items) for items in warnings_by_row),
+        "integrityCheckedCount": sum(1 for result in integrity_results if result is not None),
+        "integrityPassedCount": sum(1 for result in integrity_results if result is True),
+        "integrityFailedCount": sum(1 for result in integrity_results if result is False),
+        "validationResults": validation_results,
+    }
+
+
 def preview_resource_latest_rows(resource_id: int, limit: int = 10) -> dict[str, Any]:
+    started_timer = time.perf_counter()
     resource = fetch_one(
         "SELECT * FROM eco_data_resources WHERE id=%(id)s LIMIT 1",
         {"id": resource_id},
@@ -651,9 +961,16 @@ def preview_resource_latest_rows(resource_id: int, limit: int = 10) -> dict[str,
     columns = list(dict.fromkeys(column for column in columns if column))
     if not columns:
         raise ValueError("数据资源尚未维护字段，无法预览物理表")
-    quoted_columns = [_quote_identifier(column, dialect) for column in columns]
 
     stat_base = _json_object(resource.get("stat_base"))
+    configured_map = _json_object(stat_base.get("field_map") or stat_base.get("fieldMap"))
+    column_map = {
+        str(code).strip().upper(): str(column).strip()
+        for code, column in configured_map.items()
+        if str(code).strip() and str(column).strip()
+    }
+    physical_columns = [column_map.get(column.upper(), column) for column in columns]
+    quoted_columns = [_quote_identifier(column, dialect) for column in physical_columns]
     configured_time_field = str(
         stat_base.get("business_time_field")
         or stat_base.get("businessTimeField")
@@ -668,9 +985,10 @@ def preview_resource_latest_rows(resource_id: int, limit: int = 10) -> dict[str,
             (column for column in columns if any(marker in column.upper() for marker in ("TIME", "DATE", "TIMESTAMP"))),
             "",
         )
+    order_column = column_map.get(order_field.upper(), order_field) if order_field else ""
 
     safe_limit = min(max(int(limit), 1), 10)
-    order_clause = f" ORDER BY {_quote_identifier(order_field, dialect)} DESC" if order_field else ""
+    order_clause = f" ORDER BY {_quote_identifier(order_column, dialect)} DESC" if order_column else ""
     statement = f"SELECT {', '.join(quoted_columns)} FROM {quoted_table}{order_clause} LIMIT %(preview_limit)s"
     context = RuntimeContext(
         request_id=f"resource-preview-{uuid4()}",
@@ -684,106 +1002,32 @@ def preview_resource_latest_rows(resource_id: int, limit: int = 10) -> dict[str,
     )
     with measurement_connection(context) as current, current.cursor() as cursor:
         cursor.execute(statement, {"preview_limit": safe_limit})
-        candidate_rows = [dict(row) for row in cursor.fetchall()]
+        candidate_rows = [
+            {code: row.get(physical) for code, physical in zip(columns, physical_columns)}
+            for row in cursor.fetchall()
+        ]
 
-    security_config = _json_object(source.get("security_config_json"))
-    validation_rules = _json_object(source.get("validation_rules_json"))
-
-    def config_enabled(camel_name: str, snake_name: str) -> bool:
-        value = security_config.get(camel_name) if camel_name in security_config else security_config.get(snake_name, False)
-        return value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-    sampling_enabled = config_enabled("samplingEnabled", "sampling_enabled")
-    try:
-        sampling_rate = float(
-            security_config.get("samplingRate")
-            or security_config.get("sampling_rate")
-            or 100
-        )
-    except (TypeError, ValueError):
-        sampling_rate = 100
-    sampling_rate = min(max(sampling_rate, 1), 100)
-
-    sample_size = math.ceil(len(candidate_rows) * sampling_rate / 100) if sampling_enabled else 0
-    if sample_size >= len(candidate_rows):
-        sampled_rows = candidate_rows
-    elif sample_size > 0:
-        sampled_indexes = [math.floor(index * len(candidate_rows) / sample_size) for index in range(sample_size)]
-        sampled_rows = [candidate_rows[index] for index in sampled_indexes]
-    else:
-        sampled_rows = []
-
-    required_fields = [str(item).strip() for item in _json_list(validation_rules.get("required")) if str(item).strip()]
-    duplicate_keys = [
-        str(item).strip()
-        for item in _json_list(validation_rules.get("duplicateKeys") or validation_rules.get("duplicate_keys"))
-        if str(item).strip()
-    ]
-    numeric_ranges = _json_object(validation_rules.get("numericRanges") or validation_rules.get("numeric_ranges"))
-
-    def row_lookup(row: dict[str, Any]) -> dict[str, Any]:
-        return {str(key).strip().upper(): value for key, value in row.items()}
-
-    issues_by_row: list[list[str]] = [[] for _ in sampled_rows]
-    duplicate_groups: dict[tuple[Any, ...], list[int]] = {}
-    for row_index, row in enumerate(sampled_rows):
-        lookup = row_lookup(row)
-        for field_name in required_fields:
-            value = lookup.get(field_name.upper())
-            if value is None or (isinstance(value, str) and not value.strip()):
-                issues_by_row[row_index].append(f"必填字段 {field_name} 为空或不存在")
-        for field_name, configured_range in numeric_ranges.items():
-            range_values = _json_list(configured_range)
-            value = lookup.get(str(field_name).upper())
-            if value in {None, ""} or len(range_values) < 2:
-                continue
-            try:
-                numeric_value = float(value)
-                minimum, maximum = float(range_values[0]), float(range_values[1])
-                if numeric_value < minimum or numeric_value > maximum:
-                    issues_by_row[row_index].append(f"{field_name} 超出范围 [{minimum:g}, {maximum:g}]")
-            except (TypeError, ValueError):
-                issues_by_row[row_index].append(f"{field_name} 不是有效数值")
-        if duplicate_keys:
-            duplicate_value = tuple(lookup.get(field_name.upper()) for field_name in duplicate_keys)
-            if all(value is not None and value != "" for value in duplicate_value):
-                duplicate_groups.setdefault(duplicate_value, []).append(row_index)
-
-    for duplicate_indexes in duplicate_groups.values():
-        if len(duplicate_indexes) <= 1:
-            continue
-        for row_index in duplicate_indexes:
-            issues_by_row[row_index].append(f"重复键 {', '.join(duplicate_keys)} 在本次样本中重复")
-
-    validation_results = [
-        {"passed": not issues, "issues": issues}
-        for issues in issues_by_row
-    ]
-    passed_count = sum(1 for result in validation_results if result["passed"])
-    rejected_count = len(validation_results) - passed_count
-
+    ingest_config = resolve_resource_ingest_validation(resource, source)
+    sampled_rows = sample_ingest_rows(candidate_rows, ingest_config)
+    validation = validate_ingest_rows(sampled_rows, columns, ingest_config)
+    record_resource_ingest_validation(
+        context,
+        int(source_id),
+        resource_id,
+        ingest_config,
+        validation,
+        len(candidate_rows),
+        round((time.perf_counter() - started_timer) * 1000),
+        execution_type="validation_preview",
+    )
     return {
         "resourceId": resource_id,
         "tableName": table_name,
         "orderField": order_field,
         "limit": safe_limit,
         "candidateCount": len(candidate_rows),
-        "sampleCount": len(sampled_rows),
-        "passedCount": passed_count,
-        "rejectedCount": rejected_count,
-        "samplingEnabled": sampling_enabled,
-        "samplingRate": sampling_rate,
-        "integrityEnabled": config_enabled("integrityEnabled", "integrity_enabled"),
-        "checksumAlgorithm": str(
-            security_config.get("checksumAlgorithm")
-            or security_config.get("checksum_algorithm")
-            or ""
-        ),
-        "validationRule": {
-            "requiredFields": required_fields,
-            "numericRanges": numeric_ranges,
-            "duplicateKeys": duplicate_keys,
-        },
+        **ingest_config,
+        **validation,
         "columns": [
             {
                 "code": str(field.get("field_code") or ""),
@@ -797,7 +1041,6 @@ def preview_resource_latest_rows(resource_id: int, limit: int = 10) -> dict[str,
             {str(key): _json_value(value) for key, value in row.items()}
             for row in sampled_rows
         ],
-        "validationResults": validation_results,
     }
 
 
@@ -1194,6 +1437,96 @@ def _validate_range(params, context: RuntimeContext | None = None) -> tuple[str,
     return region, start_at, end_at
 
 
+def _archive_code(config: dict[str, Any], *names: str) -> str:
+    """从量测档案中读取字段代码，兼容 3.0 与 3.1 两套命名。"""
+    for name in names:
+        value = str(config.get(name) or "").strip()
+        if value:
+            return value.upper()
+    return ""
+
+
+def _measurement_archive(context: RuntimeContext | None) -> dict[str, Any] | None:
+    """读取 API 的量测档案（runtime_config_json），未配置时返回 None 表示走既有兼容路径。
+
+    量测档案示例：
+    {
+      "table": "measurement_demo.grid_low_freq_voltage",
+      "fieldMap": {"DATA_TIME": "data_time", "REGION_CODE": "region_code", ...},
+      "timeFieldCode": "DATA_TIME",
+      "regionFieldCode": "REGION_CODE",
+      "organizationFieldCode": "ORGANIZATION_CODE",
+      "pointFieldCode": "POINT_CODE",
+      "valueFieldCode": "VOLTAGE",
+      "defaultFields": ["DATA_TIME", "POINT_CODE", "VOLTAGE"],
+      "maskFields": ["POINT_CODE"],
+      "scales": {"VOLTAGE": 0.001}
+    }
+    """
+    config = _json_object(context.api.get("runtime_config_json") if context else {})
+    table = str(config.get("table") or "").strip()
+    field_map = {
+        str(code).strip().upper(): str(column).strip()
+        for code, column in _json_object(config.get("fieldMap") or config.get("field_map")).items()
+        if str(code).strip() and str(column).strip()
+    }
+    if not table or not field_map:
+        return None
+    scales: dict[str, float] = {}
+    for code, value in _json_object(
+        config.get("scales") or config.get("scaleColumns") or config.get("scale_columns")
+    ).items():
+        if not str(code).strip():
+            continue
+        try:
+            scale_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if scale_value != 1:
+            scales[str(code).strip().upper()] = scale_value
+    return {
+        "table": table,
+        "fieldMap": field_map,
+        "timeFieldCode": _archive_code(config, "timeFieldCode", "time_field_code", "timeColumn", "time_column"),
+        "regionFieldCode": _archive_code(config, "regionFieldCode", "region_field_code", "regionColumn", "region_column"),
+        "organizationFieldCode": _archive_code(config, "organizationFieldCode", "organization_field_code", "organizationColumn", "organization_column"),
+        "pointFieldCode": _archive_code(config, "pointFieldCode", "point_field_code", "pointColumn", "point_column"),
+        "valueFieldCode": _archive_code(config, "valueFieldCode", "value_field_code", "valueColumn", "value_column"),
+        "defaultFields": [
+            str(item).strip().upper()
+            for item in _json_list(config.get("defaultFields") or config.get("default_fields"))
+            if str(item).strip()
+        ],
+        "maskFields": [
+            str(item).strip().upper()
+            for item in _json_list(config.get("maskFields") or config.get("mask_fields"))
+            if str(item).strip()
+        ],
+        "scales": scales,
+    }
+
+
+def _archive_dialect(context: RuntimeContext) -> str:
+    source = fetch_one(
+        "SELECT * FROM security_data_sources WHERE id=%(id)s LIMIT 1",
+        {"id": context.api.get("data_source_id")},
+    ) or {}
+    return str(_json_object(source.get("connection_options_json")).get("dialect") or "postgresql").lower()
+
+
+def _validation_denied(context: RuntimeContext) -> RuntimeDenied:
+    return RuntimeDenied(
+        "VALIDATION_ERROR",
+        request_id=context.request_id,
+        api=context.api,
+        subject=context.subject,
+        policy=context.policy,
+        client_ip=context.client_ip,
+        query_days=context.query_days,
+        requested_rows=context.requested_rows,
+    )
+
+
 @contextmanager
 def measurement_connection(context: RuntimeContext | None = None):
     if context is None:
@@ -1209,6 +1542,14 @@ def measurement_connection(context: RuntimeContext | None = None):
     secret_ref = str(source.get("secret_ref") or "") if source else ""
     secret = settings.source_secrets.get(secret_ref, "")
     if not source or source.get("connection_status") != "connected" or not secret:
+        raise RuntimeDenied(
+            "UPSTREAM_UNAVAILABLE", request_id=context.request_id, api=context.api,
+            subject=context.subject, policy=context.policy, client_ip=context.client_ip,
+            query_days=context.query_days, requested_rows=context.requested_rows,
+        )
+    source_type = str(source.get("source_type") or "").strip()
+    if source_type in {"file_e", "message_queue"}:
+        # E 文件 / 消息通道不提供物理表直查，命中时按上游不可用处理。
         raise RuntimeDenied(
             "UPSTREAM_UNAVAILABLE", request_id=context.request_id, api=context.api,
             subject=context.subject, policy=context.policy, client_ip=context.client_ip,
@@ -1262,7 +1603,113 @@ def measurement_connection(context: RuntimeContext | None = None):
         ) from error
 
 
-def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def _ingest_validation_actionable(config: dict[str, Any]) -> bool:
+    rules = _json_object(config.get("validationRule"))
+    return bool(
+        _json_list(rules.get("requiredFields"))
+        or _json_object(rules.get("numericRanges"))
+        or _json_list(rules.get("duplicateKeys"))
+        or config.get("integrityEnabled") is True
+    )
+
+
+def _ingest_field_codes(
+    config: dict[str, Any],
+    field_map: dict[str, str],
+) -> list[str]:
+    rules = _json_object(config.get("validationRule"))
+    configured_fields = [
+        *_json_list(rules.get("requiredFields")),
+        *_json_object(rules.get("numericRanges")).keys(),
+        *_json_list(rules.get("duplicateKeys")),
+    ]
+    if config.get("integrityExecutable") is True:
+        configured_fields.append(config.get("digestField"))
+        checksum_fields = _json_list(config.get("checksumFields"))
+        configured_fields.extend(checksum_fields or list(field_map))
+
+    column_lookup = {column.upper(): code for code, column in field_map.items()}
+    result: list[str] = []
+    for field in configured_fields:
+        normalized = str(field or "").strip().upper()
+        code = normalized if normalized in field_map else column_lookup.get(normalized, "")
+        if code and code not in result:
+            result.append(code)
+    return result
+
+
+def record_resource_ingest_validation(
+    context: RuntimeContext,
+    source_id: int | None,
+    resource_id: int,
+    config: dict[str, Any],
+    validation: dict[str, Any],
+    candidate_count: int,
+    duration_ms: int,
+    execution_type: str = "resource_delivery_validation",
+) -> None:
+    if not config.get("samplingEnabled") or not _ingest_validation_actionable(config):
+        return
+    rejected_count = int(validation.get("rejectedCount") or 0)
+    warning_count = int(validation.get("warningCount") or 0)
+    configuration_warning = bool(
+        config.get("integrityEnabled") and not config.get("integrityExecutable")
+    )
+    result_status = "failed" if rejected_count else "warning" if warning_count or configuration_warning else "success"
+    now = datetime.now(timezone.utc)
+    detail = {
+        "requestId": context.request_id,
+        "resourceId": resource_id,
+        "candidateCount": candidate_count,
+        "checkedCount": int(validation.get("sampleCount") or 0),
+        "configSource": config.get("configSource"),
+        "inheritSourceRules": config.get("inheritSourceRules"),
+        "integrity": {
+            "enabled": config.get("integrityEnabled") is True,
+            "executable": config.get("integrityExecutable") is True,
+            "algorithm": config.get("checksumAlgorithm") or "",
+            "checkedCount": int(validation.get("integrityCheckedCount") or 0),
+            "passedCount": int(validation.get("integrityPassedCount") or 0),
+            "failedCount": int(validation.get("integrityFailedCount") or 0),
+        },
+        "warningCount": warning_count,
+    }
+    execute(
+        """
+        INSERT INTO security_ingest_logs
+          (batch_code, execution_type, rule_version, started_at, finished_at,
+           input_count, passed_count, rejected_count, duration_ms, result_status,
+           error_summary, result_detail_json, data_source_id, api_resource_id,
+           "createdAt", "updatedAt")
+        VALUES
+          (%(batch_code)s, %(execution_type)s, 1, %(started_at)s, %(finished_at)s,
+           %(input_count)s, %(passed_count)s, %(rejected_count)s, %(duration_ms)s, %(result_status)s,
+           %(error_summary)s, %(result_detail)s::jsonb, %(source_id)s, %(api_id)s,
+           %(finished_at)s, %(finished_at)s)
+        """,
+        {
+            "batch_code": f"INGEST-{now.strftime('%Y%m%d%H%M%S')}-{context.api.get('id') or resource_id}-{uuid4().hex[:8]}",
+            "execution_type": execution_type,
+            "started_at": datetime.fromtimestamp(
+                max(0, now.timestamp() - duration_ms / 1000),
+                tz=timezone.utc,
+            ),
+            "finished_at": now,
+            "input_count": int(validation.get("sampleCount") or 0),
+            "passed_count": int(validation.get("passedCount") or 0),
+            "rejected_count": rejected_count,
+            "duration_ms": duration_ms,
+            "result_status": result_status,
+            "error_summary": "源端数据未通过接入完整性校验" if rejected_count else None,
+            "result_detail": json.dumps(detail, ensure_ascii=False),
+            "source_id": source_id,
+            "api_id": context.api.get("id"),
+        },
+    )
+
+
+def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    started_timer = time.perf_counter()
     config = _json_object(context.api.get("runtime_config_json"))
     field_map = {
         str(code).strip().upper(): str(column).strip()
@@ -1277,6 +1724,16 @@ def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]
             query_days=context.query_days, requested_rows=context.requested_rows,
         )
 
+    resource = fetch_one(
+        "SELECT * FROM eco_data_resources WHERE id=%(id)s LIMIT 1",
+        {"id": context.api.get("resource_id")},
+    )
+    if not resource:
+        raise RuntimeDenied(
+            "ROUTE_NOT_FOUND", request_id=context.request_id, api=context.api,
+            subject=context.subject, policy=context.policy, client_ip=context.client_ip,
+            query_days=context.query_days, requested_rows=context.requested_rows,
+        )
     source = fetch_one(
         "SELECT * FROM security_data_sources WHERE id=%(id)s LIMIT 1",
         {"id": context.api.get("data_source_id")},
@@ -1287,15 +1744,34 @@ def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]
     for column in field_map.values():
         _quote_identifier(column, dialect)
 
+    resource_fields = fetch_all(
+        """
+        SELECT field_code
+        FROM eco_resource_security_fields
+        WHERE resource_id=%(resource_id)s
+        ORDER BY seq ASC NULLS LAST, id ASC
+        """,
+        {"resource_id": resource.get("id")},
+    )
+    validation_field_map = {
+        str(item.get("field_code") or "").strip().upper(): str(item.get("field_code") or "").strip()
+        for item in resource_fields
+        if str(item.get("field_code") or "").strip()
+    }
+    validation_field_map.update(field_map)
+    ingest_config = resolve_resource_ingest_validation(resource, source)
+
     requested = [item.strip().upper() for item in str(params.get("fields") or "").split(",") if item.strip()]
     default_fields = [str(item).upper() for item in _json_list(config.get("defaultFields") or config.get("default_fields"))]
     selected_codes = list(dict.fromkeys(requested or default_fields or list(field_map)))
     if not selected_codes or any(code not in field_map for code in selected_codes):
         raise PermissionError("FIELD_NOT_ALLOWED")
 
+    validation_codes = _ingest_field_codes(ingest_config, validation_field_map)
+    query_codes = list(dict.fromkeys([*selected_codes, *validation_codes]))
     select_columns = ", ".join(
-        f"{_quote_identifier(field_map[code], dialect)} AS {_quote_identifier(_camel_case(code.lower()), dialect)}"
-        for code in selected_codes
+        f"{_quote_identifier(validation_field_map[code], dialect)} AS {_quote_identifier(_camel_case(code.lower()), dialect)}"
+        for code in query_codes
     )
     query_sql, query_parameters = validate_custom_query_sql(config.get("querySql") or config.get("query_sql"))
     conditions: list[str] = []
@@ -1343,50 +1819,110 @@ def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]
             f"SELECT * FROM ({parameterize_custom_query_sql(query_sql)}) AS api_query "
             "LIMIT %(__api_limit)s OFFSET %(__api_offset)s"
         )
-        with measurement_connection(context) as current, current.cursor() as cursor:
-            cursor.execute(statement, parameters)
-            raw_rows = cursor.fetchall()
-        mask_codes = {str(item).upper() for item in _json_list(config.get("maskFields") or config.get("mask_fields"))}
-        rows = []
-        for raw in raw_rows:
-            source_row = dict(raw)
-            source_lookup = {str(key).lower(): value for key, value in source_row.items()}
-            row = {
-                _camel_case(code.lower()): source_lookup.get(str(field_map[code]).lower())
-                for code in selected_codes
-            }
-            if context.output_mode == "masked":
-                for code in mask_codes:
-                    key = _camel_case(code.lower())
-                    if row.get(key) not in {None, ""}:
-                        text = str(row[key])
-                        row[key] = f"{text[:3]}***{text[-2:]}" if len(text) > 5 else "***"
-            rows.append({key: _json_value(value) for key, value in row.items()})
-        return rows, {"page": page, "pageSize": page_size, "returnedRows": len(rows)}
-
-    parameters.update({"limit": page_size, "offset": (page - 1) * page_size})
-    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-    order_clause = f" ORDER BY {_quote_identifier(field_map[time_code], dialect)}" if time_code else ""
-    statement = f"SELECT {select_columns} FROM {quoted_table}{where_clause}{order_clause} LIMIT %(limit)s OFFSET %(offset)s"
+    else:
+        parameters.update({"limit": page_size, "offset": (page - 1) * page_size})
+        where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        order_clause = f" ORDER BY {_quote_identifier(field_map[time_code], dialect)}" if time_code else ""
+        statement = f"SELECT {select_columns} FROM {quoted_table}{where_clause}{order_clause} LIMIT %(limit)s OFFSET %(offset)s"
 
     with measurement_connection(context) as current, current.cursor() as cursor:
         cursor.execute(statement, parameters)
         raw_rows = cursor.fetchall()
-    mask_codes = {str(item).upper() for item in _json_list(config.get("maskFields") or config.get("mask_fields"))}
-    rows = []
+
+    internal_rows: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for raw in raw_rows:
-        row = dict(raw)
-        if context.output_mode == "masked":
+        source_row = dict(raw)
+        source_lookup = {str(key).lower(): value for key, value in source_row.items()}
+        internal_row: dict[str, Any] = {}
+        for code, column in validation_field_map.items():
+            aliases = (
+                str(column).lower(),
+                _camel_case(code.lower()).lower(),
+                code.lower(),
+            )
+            matched_alias = next((alias for alias in aliases if alias in source_lookup), "")
+            if not matched_alias:
+                continue
+            value = source_lookup[matched_alias]
+            internal_row[code] = value
+            internal_row[str(column)] = value
+        internal_rows.append(internal_row)
+        rows.append({
+            _camel_case(code.lower()): _json_value(internal_row.get(code))
+            for code in selected_codes
+        })
+
+    sampled_rows = (
+        sample_ingest_rows(internal_rows, ingest_config)
+        if _ingest_validation_actionable(ingest_config)
+        else []
+    )
+    validation = validate_ingest_rows(
+        sampled_rows,
+        list(validation_field_map),
+        ingest_config,
+    )
+    duration_ms = round((time.perf_counter() - started_timer) * 1000)
+    record_resource_ingest_validation(
+        context,
+        int(source.get("id") or context.api.get("data_source_id"))
+        if source.get("id") or context.api.get("data_source_id") else None,
+        int(resource.get("id")),
+        ingest_config,
+        validation,
+        len(internal_rows),
+        duration_ms,
+    )
+    if int(validation.get("rejectedCount") or 0) > 0:
+        raise RuntimeDenied(
+            "INGEST_VALIDATION_FAILED", request_id=context.request_id, api=context.api,
+            subject=context.subject, policy=context.policy, client_ip=context.client_ip,
+            query_days=context.query_days, requested_rows=context.requested_rows,
+            matched_labels=context.matched_labels, risk_factors=context.risk_factors,
+            label_snapshot_version=context.label_snapshot_version,
+        )
+
+    mask_codes = {str(item).upper() for item in _json_list(config.get("maskFields") or config.get("mask_fields"))}
+    if context.output_mode == "masked":
+        for row in rows:
             for code in mask_codes:
                 key = _camel_case(code.lower())
                 if row.get(key) not in {None, ""}:
-                    text = str(row[key])
-                    row[key] = f"{text[:3]}***{text[-2:]}" if len(text) > 5 else "***"
-        rows.append({key: _json_value(value) for key, value in row.items()})
-    return rows, {"page": page, "pageSize": page_size, "returnedRows": len(rows)}
+                    value = str(row[key])
+                    row[key] = f"{value[:3]}***{value[-2:]}" if len(value) > 5 else "***"
 
-
+    ingest_meta = {
+        "executed": bool(
+            ingest_config.get("samplingEnabled")
+            and _ingest_validation_actionable(ingest_config)
+        ),
+        "configSource": ingest_config.get("configSource"),
+        "candidateCount": len(internal_rows),
+        "checkedCount": int(validation.get("sampleCount") or 0),
+        "passedCount": int(validation.get("passedCount") or 0),
+        "rejectedCount": int(validation.get("rejectedCount") or 0),
+        "warningCount": int(validation.get("warningCount") or 0),
+        "integrityEnabled": ingest_config.get("integrityEnabled") is True,
+        "integrityExecutable": ingest_config.get("integrityExecutable") is True,
+        "integrityCheckedCount": int(validation.get("integrityCheckedCount") or 0),
+    }
+    return rows, {
+        "page": page,
+        "pageSize": page_size,
+        "returnedRows": len(rows),
+        "ingestValidation": ingest_meta,
+    }
 def aggregate_measurements(params, context: RuntimeContext | None = None) -> list[dict[str, Any]]:
+    archive = _measurement_archive(context)
+    if archive is not None:
+        return _archive_aggregate_measurements(params, context, archive)
+    if context is not None and str(params.get("metric", "active_power")) != "active_power":
+        raise _validation_denied(context)
+    return _legacy_aggregate_measurements(params, context)
+
+
+def _legacy_aggregate_measurements(params, context: RuntimeContext | None = None) -> list[dict[str, Any]]:
     region, start_at, end_at = _validate_range(params, context)
     with measurement_connection(context) as current, current.cursor() as cursor:
         cursor.execute(
@@ -1415,7 +1951,62 @@ def aggregate_measurements(params, context: RuntimeContext | None = None) -> lis
     ]
 
 
+def _archive_aggregate_measurements(
+    params: dict[str, Any],
+    context: RuntimeContext,
+    archive: dict[str, Any],
+) -> list[dict[str, Any]]:
+    region, start_at, end_at = _validate_range(params, context)
+    field_map = archive["fieldMap"]
+    metric = str(params.get("metric") or "").strip().upper()
+    value_code = metric or archive["valueFieldCode"]
+    if not value_code:
+        value_code = next((code for code in ("P_ACTIVE", "ACTIVE_POWER", "VALUE") if code in field_map), "")
+    time_code = archive["timeFieldCode"]
+    region_code = archive["regionFieldCode"]
+    if (
+        not value_code or value_code not in field_map
+        or not time_code or time_code not in field_map
+        or not region_code or region_code not in field_map
+    ):
+        raise ValueError("VALIDATION_ERROR")
+    dialect = _archive_dialect(context)
+    if dialect != "postgresql":
+        raise ValueError("VALIDATION_ERROR")
+    quoted_table = _quote_identifier(archive["table"], dialect)
+    time_column = _quote_identifier(field_map[time_code], dialect)
+    region_column = _quote_identifier(field_map[region_code], dialect)
+    value_column = _quote_identifier(field_map[value_code], dialect)
+    statement = (
+        f"SELECT {region_column} AS region_code, date_trunc('hour', {time_column}) AS hour, "
+        f"sum({value_column}) AS power_sum, avg({value_column}) AS power_average, count(*) AS sample_count "
+        f"FROM {quoted_table} "
+        f"WHERE {region_column} = %(region)s AND {time_column} >= %(start_at)s AND {time_column} < %(end_at)s "
+        f"GROUP BY {region_column}, date_trunc('hour', {time_column}) ORDER BY hour"
+    )
+    with measurement_connection(context) as current, current.cursor() as cursor:
+        cursor.execute(statement, {"region": region, "start_at": start_at, "end_at": end_at})
+        rows = cursor.fetchall()
+    return [
+        {
+            "regionCode": row["region_code"],
+            "hour": _json_value(row["hour"]),
+            "sum": _json_value(row["power_sum"]),
+            "average": _json_value(row["power_average"]),
+            "sampleCount": row["sample_count"],
+        }
+        for row in rows
+    ]
+
+
 def detail_measurements(params, context: RuntimeContext) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    archive = _measurement_archive(context)
+    if archive is not None:
+        return _archive_detail_measurements(params, context, archive)
+    return _legacy_detail_measurements(params, context)
+
+
+def _legacy_detail_measurements(params, context: RuntimeContext) -> tuple[list[dict[str, Any]], dict[str, int]]:
     region, start_at, end_at = _validate_range(params, context)
     organization = str(params.get("organizationCode") or "").strip()
     mode = context.output_mode
@@ -1469,6 +2060,80 @@ def detail_measurements(params, context: RuntimeContext) -> tuple[list[dict[str,
             if field == "point_code" and mode == "masked" and value:
                 value = str(value)[:6] + "***"
             row[_camel_case(field)] = value
+        rows.append(row)
+    return rows, {"page": page, "pageSize": page_size, "returnedRows": len(rows)}
+
+
+def _archive_detail_measurements(
+    params: dict[str, Any],
+    context: RuntimeContext,
+    archive: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    region, start_at, end_at = _validate_range(params, context)
+    organization = str(params.get("organizationCode") or "").strip()
+    mode = context.output_mode
+    if mode not in {"detail", "masked"}:
+        raise PermissionError("POLICY_NOT_FOUND")
+    field_map = archive["fieldMap"]
+    time_code = archive["timeFieldCode"]
+    region_code = archive["regionFieldCode"]
+    if not time_code or time_code not in field_map or not region_code or region_code not in field_map:
+        raise ValueError("VALIDATION_ERROR")
+    raw_fields = str(params.get("fields") or "").strip()
+    if raw_fields:
+        selected = list(dict.fromkeys(item.strip().upper() for item in raw_fields.split(",") if item.strip()))
+    else:
+        selected = archive["defaultFields"] or list(field_map)
+    if not selected or any(code not in field_map for code in selected):
+        raise PermissionError("FIELD_NOT_ALLOWED")
+    page = max(1, int(params.get("page") or 1))
+    page_size = min(
+        max(1, int(params.get("pageSize") or 100)),
+        int(context.policy.get("max_rows") or 1000),
+        1000,
+    )
+    offset = (page - 1) * page_size
+    dialect = _archive_dialect(context)
+    quoted_table = _quote_identifier(archive["table"], dialect)
+    select_columns = ", ".join(_quote_identifier(field_map[code], dialect) for code in selected)
+    conditions = [f"{_quote_identifier(field_map[region_code], dialect)} = %(region)s"]
+    parameters: dict[str, Any] = {
+        "region": region,
+        "start_at": start_at,
+        "end_at": end_at,
+        "limit": page_size,
+        "offset": offset,
+    }
+    time_column = _quote_identifier(field_map[time_code], dialect)
+    conditions.extend([f"{time_column} >= %(start_at)s", f"{time_column} < %(end_at)s"])
+    org_code = archive["organizationFieldCode"]
+    if organization and org_code and org_code in field_map:
+        conditions.append(f"{_quote_identifier(field_map[org_code], dialect)} = %(organization)s")
+        parameters["organization"] = organization
+    order: list[str] = []
+    order.append(time_column)
+    point_code = archive["pointFieldCode"]
+    if point_code and point_code in field_map:
+        order.append(_quote_identifier(field_map[point_code], dialect))
+    statement = (
+        f"SELECT {select_columns} FROM {quoted_table} "
+        f"WHERE {' AND '.join(conditions)} ORDER BY {', '.join(order)} "
+        "LIMIT %(limit)s OFFSET %(offset)s"
+    )
+    with measurement_connection(context) as current, current.cursor() as cursor:
+        cursor.execute(statement, parameters)
+        raw_rows = cursor.fetchall()
+    mask_codes = {str(code).upper() for code in archive["maskFields"]}
+    rows = []
+    for raw_row in raw_rows:
+        row = {}
+        for code in selected:
+            column = field_map[code]
+            value = _json_value(raw_row[column])
+            if code in mask_codes and mode == "masked" and value not in {None, ""}:
+                text = str(value)
+                value = f"{text[:3]}***{text[-2:]}" if len(text) > 5 else "***"
+            row[_camel_case(code.lower())] = value
         rows.append(row)
     return rows, {"page": page, "pageSize": page_size, "returnedRows": len(rows)}
 
@@ -1560,30 +2225,13 @@ def _homomorphic_values(
     processing_path: str,
     field_code: str,
 ) -> list[int | float]:
+    archive = _measurement_archive(context)
+    scale = float((archive or {}).get("scales", {}).get(field_code.upper(), 1.0))
     if processing_path == "/internal/region-hourly":
-        region, start_at, end_at = _validate_range(params, context)
-        organization = str(params.get("organizationCode") or "").strip()
-        statement = sql.SQL(
-            "SELECT active_power FROM measurement_demo.active_power_measurements "
-            "WHERE region_code=%(region)s {organization_filter} "
-            "AND measurement_time >= %(start_at)s AND measurement_time < %(end_at)s "
-            "ORDER BY measurement_time, point_code LIMIT 65"
-        ).format(
-            organization_filter=sql.SQL("AND organization_code=%(organization)s")
-            if organization
-            else sql.SQL(""),
-        )
-        with measurement_connection(context) as current, current.cursor() as cursor:
-            cursor.execute(
-                statement,
-                {
-                    "region": region,
-                    "organization": organization,
-                    "start_at": start_at,
-                    "end_at": end_at,
-                },
-            )
-            raw_values = [row["active_power"] for row in cursor.fetchall()]
+        if archive is not None:
+            raw_values = _read_archive_values(params, context, archive, field_code)
+        else:
+            raw_values = _legacy_region_hourly_values(params, context)
     else:
         query_params = {
             **params,
@@ -1604,12 +2252,89 @@ def _homomorphic_values(
         number = float(value)
         if not math.isfinite(number):
             raise _homomorphic_denied("HOMOMORPHIC_FIELD_INVALID", context)
-        values.append(int(value) if isinstance(value, int) and not isinstance(value, bool) else number)
+        if scale != 1.0:
+            values.append(number * scale)
+        elif isinstance(value, int):
+            values.append(int(value))
+        else:
+            values.append(number)
     if not values:
         raise _homomorphic_denied("HOMOMORPHIC_NO_DATA", context)
     if len(values) > 64:
         raise _homomorphic_denied("HOMOMORPHIC_SAMPLE_LIMIT", context)
     return values
+
+
+def _legacy_region_hourly_values(
+    params: dict[str, Any],
+    context: RuntimeContext,
+) -> list[Any]:
+    region, start_at, end_at = _validate_range(params, context)
+    organization = str(params.get("organizationCode") or "").strip()
+    statement = sql.SQL(
+        "SELECT active_power FROM measurement_demo.active_power_measurements "
+        "WHERE region_code=%(region)s {organization_filter} "
+        "AND measurement_time >= %(start_at)s AND measurement_time < %(end_at)s "
+        "ORDER BY measurement_time, point_code LIMIT 65"
+    ).format(
+        organization_filter=sql.SQL("AND organization_code=%(organization)s")
+        if organization
+        else sql.SQL(""),
+    )
+    with measurement_connection(context) as current, current.cursor() as cursor:
+        cursor.execute(
+            statement,
+            {
+                "region": region,
+                "organization": organization,
+                "start_at": start_at,
+                "end_at": end_at,
+            },
+        )
+        return [row["active_power"] for row in cursor.fetchall()]
+
+
+def _read_archive_values(
+    params: dict[str, Any],
+    context: RuntimeContext,
+    archive: dict[str, Any],
+    field_code: str,
+) -> list[Any]:
+    region, start_at, end_at = _validate_range(params, context)
+    field_map = archive["fieldMap"]
+    if field_code not in field_map:
+        raise _homomorphic_denied("FIELD_NOT_ALLOWED", context)
+    time_code = archive["timeFieldCode"]
+    region_code = archive["regionFieldCode"]
+    org_code = archive["organizationFieldCode"]
+    if not time_code or time_code not in field_map or not region_code or region_code not in field_map:
+        raise _homomorphic_denied("VALIDATION_ERROR", context)
+    organization = str(params.get("organizationCode") or "").strip()
+    dialect = _archive_dialect(context)
+    quoted_table = _quote_identifier(archive["table"], dialect)
+    value_column = _quote_identifier(field_map[field_code], dialect)
+    time_column = _quote_identifier(field_map[time_code], dialect)
+    region_column = _quote_identifier(field_map[region_code], dialect)
+    conditions = [
+        f"{region_column} = %(region)s",
+        f"{time_column} >= %(start_at)s",
+        f"{time_column} < %(end_at)s",
+    ]
+    parameters: dict[str, Any] = {"region": region, "start_at": start_at, "end_at": end_at}
+    if organization and org_code and org_code in field_map:
+        conditions.append(f"{_quote_identifier(field_map[org_code], dialect)} = %(organization)s")
+        parameters["organization"] = organization
+    order = [time_column]
+    point_code = archive["pointFieldCode"]
+    if point_code and point_code in field_map:
+        order.append(_quote_identifier(field_map[point_code], dialect))
+    statement = (
+        f"SELECT {value_column} AS value FROM {quoted_table} "
+        f"WHERE {' AND '.join(conditions)} ORDER BY {', '.join(order)} LIMIT 65"
+    )
+    with measurement_connection(context) as current, current.cursor() as cursor:
+        cursor.execute(statement, parameters)
+        return [row["value"] for row in cursor.fetchall()]
 
 
 def _create_homomorphic_task(
@@ -1729,6 +2454,120 @@ def _fail_homomorphic_task(
             "now": datetime.now(timezone.utc),
         },
     )
+
+
+def _record_ingest_runtime_failure(error: RuntimeDenied, duration_ms: int) -> None:
+    api = error.api or {}
+    source_id = api.get("data_source_id")
+    if not source_id:
+        return
+    now = datetime.now(timezone.utc)
+    execute(
+        """
+        INSERT INTO security_ingest_logs
+          (batch_code, execution_type, rule_version, started_at, finished_at,
+           input_count, passed_count, rejected_count, duration_ms, result_status,
+           error_summary, result_detail_json, data_source_id, api_resource_id,
+           "createdAt", "updatedAt")
+        VALUES
+          (%(batch_code)s, 'resource_delivery_error', 1, %(started_at)s, %(finished_at)s,
+           0, 0, 1, %(duration_ms)s, 'failed', %(error_summary)s,
+           %(result_detail)s::jsonb, %(source_id)s, %(api_id)s,
+           %(finished_at)s, %(finished_at)s)
+        """,
+        {
+            "batch_code": f"INGEST-ERROR-{now.strftime('%Y%m%d%H%M%S')}-{api.get('id') or api.get('resource_id') or 'NA'}-{uuid4().hex[:8]}",
+            "started_at": datetime.fromtimestamp(
+                max(0, now.timestamp() - max(0, duration_ms) / 1000),
+                tz=timezone.utc,
+            ),
+            "finished_at": now,
+            "duration_ms": max(0, duration_ms),
+            "error_summary": error.message,
+            "result_detail": json.dumps(
+                {
+                    "requestId": error.request_id,
+                    "resourceId": api.get("resource_id"),
+                    "errorCode": error.code,
+                    "stage": "source_read",
+                },
+                ensure_ascii=False,
+            ),
+            "source_id": source_id,
+            "api_id": api.get("id"),
+        },
+    )
+
+
+def _record_homomorphic_runtime_failure(error: RuntimeDenied, duration_ms: int) -> None:
+    api = error.api or {}
+    subject = error.subject or {}
+    if not api or not subject:
+        return
+    idempotency_key = f"resource-api:{error.request_id}"
+    existing = fetch_one(
+        "SELECT id FROM security_confidential_tasks WHERE idempotency_key=%(key)s LIMIT 1",
+        {"key": idempotency_key},
+    )
+    if existing:
+        return
+    now = datetime.now(timezone.utc)
+    event = _homomorphic_event(
+        "failed",
+        "failed",
+        error.message,
+        request_id=error.request_id,
+        duration_ms=max(0, duration_ms),
+    )
+    summary = {
+        "trigger": "resource-api-policy",
+        "outputMode": "encrypted",
+        "requestId": error.request_id,
+        "resource": {"id": api.get("resource_id")},
+        "events": [event],
+        "logs": [event],
+        "failureCode": error.code,
+    }
+    execute(
+        """
+        INSERT INTO security_confidential_tasks (
+          task_code, task_name, scenario, task_status, risk_level, algorithm,
+          source_domain, target_domain, progress, execution_summary_json, task_tags,
+          sample_count, idempotency_key, started_at, completed_at, duration_ms,
+          error_summary, subject_id, api_resource_id, "createdAt", "updatedAt"
+        ) VALUES (
+          %(task_code)s, '同态加密请求异常', %(scenario)s, 'failed', %(risk_level)s, 'unresolved',
+          'data-resource', 'authorized-consumer', 0, %(summary)s::jsonb, %(tags)s::json,
+          0, %(idempotency_key)s, %(started_at)s, %(finished_at)s, %(duration_ms)s,
+          %(error_summary)s, %(subject_id)s, %(api_id)s, %(finished_at)s, %(finished_at)s
+        ) ON CONFLICT DO NOTHING
+        """,
+        {
+            "task_code": f"HE-ERROR-{uuid4().hex[:20].upper()}",
+            "scenario": str((error.policy or {}).get("scenario") or "resource-data-query"),
+            "risk_level": risk_level(error.risk_score),
+            "summary": json.dumps(summary, ensure_ascii=False),
+            "tags": json.dumps(["资源 API 触发", "异常日志"], ensure_ascii=False),
+            "idempotency_key": idempotency_key,
+            "started_at": datetime.fromtimestamp(
+                max(0, now.timestamp() - max(0, duration_ms) / 1000),
+                tz=timezone.utc,
+            ),
+            "finished_at": now,
+            "duration_ms": max(0, duration_ms),
+            "error_summary": error.message,
+            "subject_id": subject.get("id"),
+            "api_id": api.get("id"),
+        },
+    )
+
+
+def record_runtime_engine_exception(error: RuntimeDenied, duration_ms: int) -> None:
+    if error.code == "UPSTREAM_UNAVAILABLE":
+        _record_ingest_runtime_failure(error, duration_ms)
+    output_mode = str((error.policy or {}).get("output_mode") or "")
+    if output_mode == "encrypted":
+        _record_homomorphic_runtime_failure(error, duration_ms)
 
 
 async def execute_homomorphic_resource_request(
@@ -1925,7 +2764,7 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
         )
         return {"requestId": context.request_id, "data": rows, "meta": meta}, len(rows)
     if processing_path == "/internal/region-hourly":
-        if context.output_mode != "aggregate" or params.get("metric", "active_power") != "active_power":
+        if context.output_mode != "aggregate":
             raise RuntimeDenied(
                 "VALIDATION_ERROR", request_id=context.request_id, api=context.api,
                 subject=context.subject, policy=context.policy, client_ip=context.client_ip,
@@ -1942,6 +2781,17 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
             },
         }, len(rows)
     if processing_path == "/internal/resource-query":
+        if context.output_mode == "aggregate":
+            rows = aggregate_measurements(params, context)
+            return {
+                "requestId": context.request_id,
+                "data": rows,
+                "meta": {
+                    "decision": "allow",
+                    "outputMode": context.output_mode,
+                    "riskLevel": context.level,
+                },
+            }, len(rows)
         if context.output_mode not in {"detail", "masked"}:
             raise RuntimeDenied(
                 "POLICY_NOT_FOUND", request_id=context.request_id, api=context.api,
@@ -1951,6 +2801,28 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
         rows, meta = resource_query(params, context)
         meta.update({"decision": "allow", "outputMode": context.output_mode, "riskLevel": context.level})
         return {"requestId": context.request_id, "data": rows, "meta": meta}, len(rows)
+    if processing_path == "/internal/push/switch-event":
+        # 消息推送服务：接入档案与路径占位，演示环境不产生真实推送。
+        config = _json_object(context.api.get("runtime_config_json"))
+        return {
+            "requestId": context.request_id,
+            "status": "placeholder",
+            "serviceType": "message_push",
+            "topic": str(config.get("topic") or "switch-event"),
+            "message": "开关变位消息推送通道已完成接入档案与路径占位，演示环境不产生真实推送。",
+            "meta": {"decision": "allow", "outputMode": context.output_mode, "riskLevel": context.level},
+        }, 0
+    if processing_path == "/internal/model/line-relation":
+        # 模型衍生服务：接入档案与路径占位，演示环境不执行真实模型。
+        config = _json_object(context.api.get("runtime_config_json"))
+        return {
+            "requestId": context.request_id,
+            "status": "placeholder",
+            "serviceType": "model_service",
+            "model": str(config.get("model") or "line-relation"),
+            "message": "配网线变关系辨识模型服务已完成接入档案与路径占位，演示环境不执行真实模型。",
+            "meta": {"decision": "allow", "outputMode": context.output_mode, "riskLevel": context.level},
+        }, 0
     raise RuntimeDenied(
         "ROUTE_NOT_FOUND", request_id=context.request_id, api=context.api, subject=context.subject,
         policy=context.policy, client_ip=context.client_ip, query_days=context.query_days,
@@ -2196,6 +3068,16 @@ def upsert_behavior_baseline(subject_id: int, api_id: int, values: dict[str, Any
     return row or {}
 
 
+SUPPORTED_ORCHESTRATOR_PATHS = {
+    "",
+    "/internal/active-power",
+    "/internal/region-hourly",
+    "/internal/resource-query",
+    "/internal/push/switch-event",
+    "/internal/model/line-relation",
+}
+
+
 def validate_api(api: dict[str, Any]) -> list[str]:
     errors = []
     if not str(api.get("gateway_path") or "").startswith("/data-api/"):
@@ -2205,12 +3087,7 @@ def validate_api(api: dict[str, Any]) -> list[str]:
     mode = str(api.get("access_mode") or "")
     if mode == "direct" and not str(api.get("upstream_url") or "").startswith(("http://", "https://")):
         errors.append("直接纳管模式必须配置有效上游地址")
-    if mode in {"develop", "orchestrate"} and str(api.get("orchestrator_path") or "") not in {
-        "",
-        "/internal/active-power",
-        "/internal/region-hourly",
-        "/internal/resource-query",
-    }:
+    if mode in {"develop", "orchestrate"} and str(api.get("orchestrator_path") or "") not in SUPPORTED_ORCHESTRATOR_PATHS:
         errors.append("处理路径未绑定可用的数据处理能力")
     if mode not in {"direct", "develop", "orchestrate"}:
         errors.append("接入模式不受支持")
@@ -2225,7 +3102,7 @@ def publish_api(api_id: int) -> dict[str, Any]:
     runtime_config = _json_object(api.get("runtime_config_json"))
     source_id = api.get("data_source_id")
     if str(api.get("access_mode") or "") in {"develop", "orchestrate"} and str(api.get("orchestrator_path") or "") not in {
-        "/internal/active-power", "/internal/region-hourly",
+        "/internal/active-power", "/internal/region-hourly", "/internal/push/switch-event", "/internal/model/line-relation",
     }:
         try:
             runtime_config, source_id = build_resource_runtime_config(api)

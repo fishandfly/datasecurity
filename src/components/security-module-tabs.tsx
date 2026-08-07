@@ -28,9 +28,7 @@ type SecurityModuleTab = {
 }
 
 const moduleTabs: Record<SecurityModuleId, SecurityModuleTab[]> = {
-  resources: [
-    { label: '数据资源', path: '/security-governance/resources/catalog', icon: Database },
-  ],
+  resources: [],
   services: [
     { label: 'API 资源', path: '/security-governance/resources/apis', icon: Braces },
   ],
@@ -45,13 +43,14 @@ const moduleTabs: Record<SecurityModuleId, SecurityModuleTab[]> = {
     { label: '标注记录', path: '/security-governance/tags/records', icon: FileOutput },
   ],
   access: [
-    { label: '访问主体', path: '/security-governance/access/subjects', icon: Users },
+    { label: '数据应用', path: '/security-governance/access/subjects', icon: Users },
     { label: '策略发布', path: '/security-governance/access/publish', icon: UploadCloud },
     { label: '行为基线', path: '/security-governance/access/baselines', icon: Gauge },
     { label: '调用与决策日志', path: '/security-governance/access/audit', icon: ScrollText },
   ],
   risks: [
     { label: '风险事件', path: '/security-governance/risks/events', icon: Activity },
+    { label: '日志中心', path: '/security-governance/risks/log-center', icon: ScrollText },
   ],
   homomorphic: [
     { label: '密钥管理', path: '/security-governance/homomorphic/keys', icon: KeyRound },

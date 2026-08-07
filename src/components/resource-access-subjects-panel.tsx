@@ -61,7 +61,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
       setApi(null)
       setSubjects([])
       setBaselines([])
-      setError(toErrorMessage(currentError, '读取数据资源访问主体失败'))
+      setError(toErrorMessage(currentError, '读取数据资源数据应用失败'))
     } finally {
       setIsLoading(false)
     }
@@ -99,7 +99,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
     try {
       const latest = await listSecurityV3Records('security_access_subjects', { filter: { id: subjectId } })
       const subject = latest[0]
-      if (!subject) throw new Error('访问主体不存在或已被删除')
+      if (!subject) throw new Error('数据应用不存在或已被删除')
       const allowedApiCodes = action === 'grant'
         ? grantApiAuthorization(subject.allowed_api_codes_json, apiCode)
         : revokeApiAuthorization(subject.allowed_api_codes_json, apiCode)
@@ -113,7 +113,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
       setPendingRevokeId('')
       await load()
     } catch (currentError) {
-      setError(toErrorMessage(currentError, action === 'grant' ? '访问主体授权失败' : '取消访问主体授权失败'))
+      setError(toErrorMessage(currentError, action === 'grant' ? '数据应用授权失败' : '取消数据应用授权失败'))
     } finally {
       setIsActing(false)
     }
@@ -130,7 +130,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
   }
 
   if (isLoading && !api) {
-    return <div className="rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-12 text-center text-[0.875rem] text-[var(--text-muted)]">正在读取访问主体授权...</div>
+    return <div className="rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-12 text-center text-[0.875rem] text-[var(--text-muted)]">正在读取数据应用授权...</div>
   }
 
   if (!api) {
@@ -144,7 +144,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
-        此处维护访问主体对当前资源唯一 API <span className="font-mono font-semibold">{apiCode}</span> 的授权和行为基线。每个“主体 + API”只有一条行为基线；授权后仍需存在已发布且场景匹配的访问策略，请求才会被放行。
+        此处维护数据应用对当前资源唯一 API <span className="font-mono font-semibold">{apiCode}</span> 的授权和行为基线。每个“主体 + API”只有一条行为基线；授权后仍需存在已发布且场景匹配的访问策略，请求才会被放行。
       </div>
 
       {error ? <div className="rounded-[10px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-3 text-[0.8125rem] text-[var(--status-danger-text)]">{error}</div> : null}
@@ -154,7 +154,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
         <section className="rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] p-4 shadow-[var(--shadow-soft)]">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
             <label className="min-w-0 flex-1">
-              <span className="mb-2 block text-[0.8125rem] font-medium text-[var(--text-secondary)]">选择待授权访问主体</span>
+              <span className="mb-2 block text-[0.8125rem] font-medium text-[var(--text-secondary)]">选择待授权数据应用</span>
               <select
                 value={selectedSubjectId}
                 disabled={isActing || availableSubjects.length === 0}
@@ -176,7 +176,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
               className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] px-4 text-[0.8125rem] font-semibold text-white shadow-[0_10px_22px_rgba(var(--theme-strong-rgb),0.2)] transition hover:-translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isActing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
-              添加访问主体
+              添加数据应用
             </button>
           </div>
         </section>
@@ -185,7 +185,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
       <section className="overflow-hidden rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] shadow-[var(--shadow-soft)]">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--surface-outline)] bg-[var(--table-header-bg)] px-4 py-3">
           <div className="flex items-center gap-2 text-[0.875rem] font-semibold text-[var(--text-main)]">
-            <Users className="h-4 w-4 text-[var(--primary)]" />已授权访问主体
+            <Users className="h-4 w-4 text-[var(--primary)]" />已授权数据应用
             <span className="rounded-full bg-[var(--primary-soft)] px-2 py-0.5 text-[0.75rem] text-[var(--primary)]">{authorizedSubjects.length}</span>
           </div>
           <button type="button" disabled={isLoading} onClick={() => void load()} className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-3 text-[0.75rem] font-medium text-[var(--text-secondary)] transition hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-50">
@@ -239,7 +239,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
                           <button
                             type="button"
                             disabled={isActing || globalAuthorization}
-                            title={globalAuthorization ? '该主体使用全部 API 授权，请在访问主体页面调整' : confirmingRevoke ? '再次点击确认取消授权' : '取消当前资源 API 授权'}
+                            title={globalAuthorization ? '该主体使用全部 API 授权，请在数据应用页面调整' : confirmingRevoke ? '再次点击确认取消授权' : '取消当前资源 API 授权'}
                             onClick={() => revoke(subject)}
                             className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 text-[0.75rem] font-medium text-[var(--status-danger-text)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
                           >
@@ -257,7 +257,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
             </tbody>
           </table>
         </div>
-        {!isLoading && authorizedSubjects.length === 0 ? <div className="px-4 py-10 text-center text-[0.875rem] text-[var(--text-muted)]">当前资源尚未授权任何访问主体</div> : null}
+        {!isLoading && authorizedSubjects.length === 0 ? <div className="px-4 py-10 text-center text-[0.875rem] text-[var(--text-muted)]">当前资源尚未授权任何数据应用</div> : null}
       </section>
       <ResourceBehaviorBaselineDialog
         open={Boolean(baselineSubject)}

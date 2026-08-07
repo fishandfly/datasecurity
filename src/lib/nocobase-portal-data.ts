@@ -285,6 +285,7 @@ type RawResource = {
   dataResourceTypeId?: number | string | null
   data_resource_type?: RawDictionaryRelation | null
   tags?: unknown[] | null
+  resource_tags?: unknown[] | null
 }
 
 type ListResponse<T> = {
@@ -340,11 +341,12 @@ const PORTAL_LIST_RESOURCE_FIELDS = [
   'source_tablelist',
   'stat_base',
   'access_url',
+  'resource_tags',
 ] as const
 
 // == localStorage cache persistence for portal data ==
-const LS_CACHE_PORTAL_LIST = 'eco_cache_portal_list_v3'
-const LS_CACHE_RAW_RESOURCES = 'eco_cache_raw_resources_v3'
+const LS_CACHE_PORTAL_LIST = 'eco_cache_portal_list_v4'
+const LS_CACHE_RAW_RESOURCES = 'eco_cache_raw_resources_v4'
 const CACHE_TTL_MINUTES = 30
 
 function readStorageCache<T>(key: string): { data: T; cachedAt: string } | null {
@@ -1348,7 +1350,7 @@ function mapResource(
   }
 
   const fieldRows = mapFieldRows(resource.data_items ?? resource.data_items_json)
-  const tags = normalizeTags(resource.tags)
+  const tags = normalizeTags(resource.resource_tags ?? resource.tags)
   const fieldCount = parseMetricNumber(resource.field_count) || fieldRows.length
   const countValue = parseMetricNumber(resource.data_volume)
   const usageCount = parseMetricNumber(resource.usage_count)

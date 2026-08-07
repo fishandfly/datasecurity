@@ -131,7 +131,7 @@ export function ResourceBehaviorBaselineDialog({ open, api, subject, baseline, o
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
           <div className="rounded-[10px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.75rem] leading-6 text-[var(--status-info-text)]">
-            每个“访问主体 + API”只保留一条行为基线，再次保存会更新原记录并递增版本。访问时段边界仍由访问策略统一管理。
+            每个“数据应用 + API”只保留一条行为基线，再次保存会更新原记录并递增版本。访问时段边界仍由访问策略统一管理。
           </div>
 
           <section className="grid gap-4 rounded-[12px] border border-[var(--surface-outline)] bg-[var(--surface-muted)] p-4 sm:grid-cols-2">

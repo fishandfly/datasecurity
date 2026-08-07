@@ -1,20 +1,50 @@
 import json
+import hashlib
 from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
 
 from app.runtime import (
+    RuntimeContext,
+    RuntimeDenied,
     build_resource_runtime_config,
     ensure_resource_api,
     ensure_behavior_baseline_unique_index,
     publish_api,
     publish_policy,
     preview_resource_latest_rows,
+    resource_query,
     unpublish_api,
     upsert_behavior_baseline,
+    validate_api,
     validate_custom_query_sql,
 )
+
+
+def resource_runtime_context():
+    return RuntimeContext(
+        request_id="REQ-INGEST-001",
+        api={
+            "id": 5,
+            "resource_id": 8,
+            "data_source_id": 9,
+            "runtime_config_json": {
+                "table": "measurement_data",
+                "fieldMap": {
+                    "POINT_ID": "point_id",
+                    "ACTIVE_POWER": "active_power",
+                },
+                "defaultFields": ["POINT_ID", "ACTIVE_POWER"],
+            },
+        },
+        subject={"id": 3},
+        policy={"id": 10, "output_mode": "detail", "max_rows": 1000},
+        risk_score=0,
+        client_ip="10.20.10.8",
+        query_days=1,
+        requested_rows=100,
+    )
 
 
 def test_behavior_baseline_unique_index_rejects_existing_duplicates():
@@ -119,6 +149,19 @@ def test_build_resource_runtime_config_reads_resource_query_sql_and_defaults():
     assert config["defaultParams"] == {"regionCode": "REGION-A"}
 
 
+def test_build_resource_runtime_config_preserves_scales():
+    api = {"id": 9, "resource_id": 3, "data_source_id": 7, "runtime_config_json": {"scales": {"VOLTAGE": 0.001, "IGNORED": 1}}}
+    resource = {"id": 3, "data_source_id": 7, "source_table": "measurement.voltage", "stat_base": {}}
+    source = {"id": 7, "connection_status": "connected", "connection_options_json": {"dialect": "postgresql"}}
+    fields = [
+        {"field_code": "data_time", "output_allowed": True, "required_desensitization": False},
+        {"field_code": "voltage", "output_allowed": True, "required_desensitization": False},
+    ]
+    with patch("app.runtime.fetch_one", side_effect=[resource, source]), patch("app.runtime.fetch_all", return_value=fields):
+        config, _ = build_resource_runtime_config(api)
+    assert config["scales"] == {"VOLTAGE": 0.001}
+
+
 def test_custom_query_sql_only_allows_single_select():
     statement, parameters = validate_custom_query_sql("SELECT value FROM readings WHERE region = :regionCode;")
     assert statement == "SELECT value FROM readings WHERE region = :regionCode"
@@ -175,6 +218,17 @@ def test_unpublish_api_disables_route():
     assert "api_status='disabled'" in fetch_one.call_args.args[0]
 
 
+def test_validate_api_accepts_placeholder_orchestrator_paths():
+    for path in ["/internal/push/switch-event", "/internal/model/line-relation"]:
+        api = {
+            "gateway_path": "/data-api/internal/placeholder",
+            "http_method": "POST",
+            "access_mode": "orchestrate",
+            "orchestrator_path": path,
+        }
+        assert validate_api(api) == []
+
+
 def test_preview_resource_latest_rows_uses_defined_fields_and_time_descending():
     resource = {"id": 8, "data_source_id": 9, "source_table": "measurement_data", "stat_base": {}}
     source = {
@@ -228,7 +282,8 @@ def test_preview_resource_latest_rows_uses_defined_fields_and_time_descending():
 
     with patch("app.runtime.fetch_one", side_effect=[resource, source]), \
          patch("app.runtime.fetch_all", return_value=fields), \
-         patch("app.runtime.measurement_connection", preview_connection):
+         patch("app.runtime.measurement_connection", preview_connection), \
+         patch("app.runtime.execute"):
         result = preview_resource_latest_rows(8)
 
     assert result["tableName"] == "measurement_data"
@@ -281,13 +336,200 @@ def test_preview_resource_latest_rows_returns_no_samples_when_sampling_disabled(
 
     with patch("app.runtime.fetch_one", side_effect=[resource, source]), \
          patch("app.runtime.fetch_all", return_value=fields), \
-         patch("app.runtime.measurement_connection", preview_connection):
+         patch("app.runtime.measurement_connection", preview_connection), \
+         patch("app.runtime.execute"):
         result = preview_resource_latest_rows(8)
 
     assert result["candidateCount"] == 1
     assert result["samplingEnabled"] is False
     assert result["sampleCount"] == 0
     assert result["rows"] == []
+
+
+def test_preview_resource_latest_rows_applies_resource_rules_and_digest_validation():
+    canonical = json.dumps(
+        {"ACTIVE_POWER": 100, "POINT_ID": "P-001"},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    valid_digest = hashlib.new("sm3", canonical).hexdigest()
+    resource = {
+        "id": 8,
+        "data_source_id": 9,
+        "source_table": "measurement_data",
+        "stat_base": {
+            "ingest_validation": {
+                "inheritSourceRules": False,
+                "samplingOverride": True,
+                "samplingEnabled": True,
+                "samplingRate": 100,
+                "requiredFields": ["point_id"],
+                "integrityMode": "digest_field",
+                "checksumAlgorithm": "SM3",
+                "digestField": "data_digest",
+                "checksumFields": ["point_id", "active_power"],
+                "integrityFailureAction": "reject",
+            }
+        },
+    }
+    source = {
+        "id": 9,
+        "connection_status": "connected",
+        "connection_options_json": {"dialect": "mysql"},
+        "security_config_json": {"samplingEnabled": False, "integrityEnabled": False},
+        "validation_rules_json": {"required": ["source_only_field"]},
+    }
+    fields = [
+        {"field_code": "point_id", "field_name": "测点标识", "data_type": "varchar(64)"},
+        {"field_code": "active_power", "field_name": "有功功率", "data_type": "decimal"},
+        {"field_code": "data_digest", "field_name": "数据摘要", "data_type": "varchar(64)"},
+    ]
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, _statement, parameters):
+            assert parameters == {"preview_limit": 10}
+
+        def fetchall(self):
+            return [
+                {"point_id": "P-001", "active_power": 100, "data_digest": valid_digest},
+                {"point_id": "P-002", "active_power": 200, "data_digest": valid_digest},
+            ]
+
+    class Current:
+        def cursor(self):
+            return Cursor()
+
+    @contextmanager
+    def preview_connection(_context):
+        yield Current()
+
+    with patch("app.runtime.fetch_one", side_effect=[resource, source]), \
+         patch("app.runtime.fetch_all", return_value=fields), \
+         patch("app.runtime.measurement_connection", preview_connection), \
+         patch("app.runtime.execute"):
+        result = preview_resource_latest_rows(8)
+
+    assert result["configSource"] == "resource"
+    assert result["inheritSourceRules"] is False
+    assert result["validationRule"]["requiredFields"] == ["point_id"]
+    assert result["samplingEnabled"] is True
+    assert result["integrityExecutable"] is True
+    assert result["digestField"] == "data_digest"
+    assert result["integrityCheckedCount"] == 2
+    assert result["integrityPassedCount"] == 1
+    assert result["integrityFailedCount"] == 1
+    assert result["passedCount"] == 1
+    assert result["rejectedCount"] == 1
+    assert result["validationResults"] == [
+        {"passed": True, "issues": [], "integrityPassed": True},
+        {"passed": False, "issues": ["SM3 完整性校验失败"], "integrityPassed": False},
+    ]
+
+
+@pytest.mark.parametrize("digest_matches", [True, False])
+def test_resource_query_executes_resource_validation_before_delivery(digest_matches):
+    canonical = json.dumps(
+        {"ACTIVE_POWER": 100, "POINT_ID": "P-001"},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    valid_digest = hashlib.new("sm3", canonical).hexdigest()
+    resource = {
+        "id": 8,
+        "stat_base": {
+            "ingest_validation": {
+                "inheritSourceRules": False,
+                "samplingOverride": True,
+                "samplingEnabled": True,
+                "samplingRate": 100,
+                "requiredFields": ["POINT_ID"],
+                "integrityMode": "digest_field",
+                "checksumAlgorithm": "SM3",
+                "digestField": "DATA_DIGEST",
+                "checksumFields": ["POINT_ID", "ACTIVE_POWER"],
+                "integrityFailureAction": "reject",
+            }
+        },
+    }
+    source = {
+        "id": 9,
+        "connection_options_json": {"dialect": "postgresql"},
+        "security_config_json": {},
+        "validation_rules_json": {},
+    }
+    fields = [
+        {"field_code": "POINT_ID"},
+        {"field_code": "ACTIVE_POWER"},
+        {"field_code": "DATA_DIGEST"},
+    ]
+    captured = {"statement": "", "logs": []}
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, statement, parameters):
+            captured["statement"] = statement
+            assert parameters == {"limit": 100, "offset": 0}
+
+        def fetchall(self):
+            return [{
+                "pointId": "P-001",
+                "activePower": 100,
+                "dataDigest": valid_digest if digest_matches else "0" * 64,
+            }]
+
+    class Current:
+        def cursor(self):
+            return Cursor()
+
+    @contextmanager
+    def query_connection(_context):
+        yield Current()
+
+    def capture_log(statement, parameters=None):
+        captured["logs"].append((statement, parameters or {}))
+        return 1
+
+    with patch("app.runtime.fetch_one", side_effect=[resource, source]), \
+         patch("app.runtime.fetch_all", return_value=fields), \
+         patch("app.runtime.measurement_connection", query_connection), \
+         patch("app.runtime.execute", side_effect=capture_log):
+        if digest_matches:
+            rows, meta = resource_query({}, resource_runtime_context())
+        else:
+            with pytest.raises(RuntimeDenied) as denied:
+                resource_query({}, resource_runtime_context())
+
+    assert '"DATA_DIGEST" AS "dataDigest"' in captured["statement"]
+    assert len(captured["logs"]) == 1
+    log_parameters = captured["logs"][0][1]
+    detail = json.loads(log_parameters["result_detail"])
+    assert detail["requestId"] == "REQ-INGEST-001"
+    assert detail["checkedCount"] == 1
+    assert "P-001" not in log_parameters["result_detail"]
+    assert valid_digest not in log_parameters["result_detail"]
+    if digest_matches:
+        assert rows == [{"pointId": "P-001", "activePower": 100}]
+        assert meta["ingestValidation"]["executed"] is True
+        assert meta["ingestValidation"]["integrityCheckedCount"] == 1
+        assert log_parameters["result_status"] == "success"
+        assert log_parameters["rejected_count"] == 0
+    else:
+        assert denied.value.code == "INGEST_VALIDATION_FAILED"
+        assert log_parameters["result_status"] == "failed"
+        assert log_parameters["rejected_count"] == 1
 
 
 def test_publish_policy_requires_subject_api_authorization():

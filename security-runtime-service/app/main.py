@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime, timezone
 import json
@@ -25,10 +26,12 @@ from .runtime import (
     unpublish_api,
     record_allowed,
     record_denied,
+    record_runtime_engine_exception,
     runtime_summary,
 )
+from .streaming import streaming_config, streaming_engine_loop
 from .settings import settings
-from .source_connection import check_database_connection
+from .source_connection import check_channel_connection, check_database_connection
 
 
 app = FastAPI(
@@ -45,6 +48,13 @@ def ensure_runtime_constraints() -> None:
         ensure_behavior_baseline_unique_index()
     except Exception:
         # 首次安装时管理表可能尚未创建，保存基线时会再次执行并返回明确错误。
+        pass
+    try:
+        if streaming_config().get("enabled") is not False:
+            thread = threading.Thread(target=streaming_engine_loop, name="streaming-engine", daemon=True)
+            thread.start()
+    except Exception:
+        # 流式引擎启动失败不影响其他服务启动，轮询循环内会重试。
         pass
 
 
@@ -85,6 +95,7 @@ async def _require_management_session(request: Request) -> JSONResponse | None:
 async def health() -> dict[str, Any]:
     database_status = "ok"
     homomorphic_status = "ok"
+    streaming_status = "ok"
     try:
         summary = runtime_summary()
     except Exception:
@@ -96,6 +107,12 @@ async def health() -> dict[str, Any]:
             response.raise_for_status()
     except (httpx.HTTPError, ValueError):
         homomorphic_status = "unavailable"
+    try:
+        config = streaming_config()
+        if config.get("enabled") is False:
+            streaming_status = "disabled"
+    except Exception:
+        streaming_status = "unavailable"
     status = "ok" if database_status == "ok" else "degraded"
     return {
         "status": status,
@@ -105,6 +122,7 @@ async def health() -> dict[str, Any]:
             "dataAccess": database_status,
             "policyControl": database_status,
             "homomorphicComputation": homomorphic_status,
+            "streamingProcessing": streaming_status,
         },
         "configuration": summary,
     }
@@ -139,6 +157,10 @@ async def data_api(request: Request):
     except RuntimeDenied as error:
         duration_ms = round((time.perf_counter() - started_at) * 1000)
         try:
+            record_runtime_engine_exception(error, duration_ms)
+        except Exception:
+            pass
+        try:
             record_denied(error, duration_ms)
         except Exception:
             pass
@@ -155,13 +177,37 @@ async def data_api(request: Request):
             query_days=context.query_days if context else 0,
             requested_rows=context.requested_rows if context else 0,
         )
+        duration_ms = round((time.perf_counter() - started_at) * 1000)
         try:
-            record_denied(denied, round((time.perf_counter() - started_at) * 1000))
+            record_runtime_engine_exception(denied, duration_ms)
+        except Exception:
+            pass
+        try:
+            record_denied(denied, duration_ms)
         except Exception:
             pass
         return _error(denied.status, denied.code, denied.message, denied.request_id)
     except Exception:
-        return _error(500, "INTERNAL_ERROR", "服务处理失败", context.request_id if context else None)
+        denied = RuntimeDenied(
+            "INTERNAL_ERROR",
+            request_id=context.request_id if context else str(uuid4()),
+            api=context.api if context else None,
+            subject=context.subject if context else None,
+            policy=context.policy if context else None,
+            client_ip=context.client_ip if context else "gateway",
+            query_days=context.query_days if context else 0,
+            requested_rows=context.requested_rows if context else 0,
+        )
+        duration_ms = round((time.perf_counter() - started_at) * 1000)
+        try:
+            record_runtime_engine_exception(denied, duration_ms)
+        except Exception:
+            pass
+        try:
+            record_denied(denied, duration_ms)
+        except Exception:
+            pass
+        return _error(denied.status, denied.code, denied.message, denied.request_id)
 
 
 @app.post("/management/data-sources/{source_id}/test")
@@ -182,7 +228,9 @@ async def test_data_source(source_id: int, request: Request):
     status = "connected"
     try:
         source_type = str(source.get("source_type") or "")
-        if source_type in {"existing_api", "third_party_api"}:
+        if source_type in {"file_e", "message_queue"}:
+            check_channel_connection(source, settings.connection_timeout_seconds)
+        elif source_type in {"existing_api", "third_party_api"}:
             url = str(source.get("host") or "")
             if not url.startswith(("http://", "https://")):
                 raise ValueError("接口地址格式不正确")
@@ -325,6 +373,10 @@ async def preview_resource_latest_rows_endpoint(resource_id: int, request: Reque
     except ValueError as error:
         return _error(422, "VALIDATION_ERROR", str(error))
     except RuntimeDenied as error:
+        try:
+            record_runtime_engine_exception(error, 0)
+        except Exception:
+            pass
         return _error(error.status, error.code, error.message, error.request_id)
 
 

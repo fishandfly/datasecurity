@@ -283,7 +283,7 @@ function RuleEditor({ policy, ruleMode, onRuleModeChange }: { policy: PolicyEngi
             <div className="grid gap-2">
               {[
                 ['数据敏感级别', '等于', policy.risk === '高' ? '核心/高敏感' : policy.risk === '中' ? '敏感' : '内部'],
-                ['访问主体角色', '包含', policy.scope],
+                ['数据应用角色', '包含', policy.scope],
                 ['资源归属部门', '等于', policy.ownerDept],
               ].map(([field, operator, value]) => (
                 <div key={`${field}-${operator}`} className="grid gap-2 rounded-[8px] bg-[var(--surface-muted)] p-3 text-[0.8125rem] text-[var(--text-secondary)] sm:grid-cols-[1fr_96px_1fr]">

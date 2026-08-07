@@ -13,6 +13,7 @@ export type SecurityGovernanceJoinedItem = {
   updateTime: string
   serviceTypeId: string
   serviceType: string
+  tags: string[]
   mapPreview: CatalogItem['mapPreview'] | null
   categoryId: string
   category: string
@@ -203,6 +204,7 @@ export function joinSecurityGovernanceItems(
       updateTime: catalogItem?.updateTime || policy.updatedAt || '',
       serviceTypeId: catalogItem?.serviceTypeId || '',
       serviceType: catalogItem?.serviceType || '',
+      tags: catalogItem?.tags || [],
       mapPreview: catalogItem?.mapPreview || null,
       categoryId: catalogItem?.categoryId || '',
       category: catalogItem?.businessCategory || catalogItem?.category || '',
@@ -259,6 +261,7 @@ export function joinSecurityGovernanceItems(
       updateTime: item.updateTime || '',
       serviceTypeId: item.serviceTypeId || '',
       serviceType: item.serviceType || '',
+      tags: item.tags || [],
       mapPreview: item.mapPreview || null,
       categoryId: item.categoryId || '',
       category: item.businessCategory || item.category || '',
@@ -320,6 +323,7 @@ function matchesKeyword(item: SecurityGovernanceJoinedItem, keyword: string) {
     item.securityCategory,
     item.securityLevel,
     item.dataSubjectType,
+    ...item.tags,
     item.securityOwnerDept,
     item.securityOwnerUserName,
     item.assessmentBasis,

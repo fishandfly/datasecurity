@@ -10,12 +10,12 @@ test('数据安全运行链路按五个纵向分组展示', () => {
   assert.match(pageSource, /title: '接入校验'/)
   assert.match(pageSource, /title: '数据管控'/)
   assert.match(pageSource, /title: '访问控制'/)
-  assert.match(pageSource, /title: '访问主体'/)
+  assert.match(pageSource, /title: '数据应用'/)
   assert.match(pageSource, /groups\.map\(\(group\) =>/)
   assert.match(pageSource, /height="370"/)
 })
 
-test('中台数据源和访问主体包含研究文档要求的节点', () => {
+test('中台数据源和数据应用包含研究文档要求的节点', () => {
   assert.match(pageSource, /title: '量测数据'/)
   assert.match(pageSource, /title: '网上电网'/)
   assert.match(pageSource, /title: '数智吉电'/)

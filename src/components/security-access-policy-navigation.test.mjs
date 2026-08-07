@@ -6,6 +6,7 @@ const tabsSource = readFileSync(new URL('./security-module-tabs.tsx', import.met
 const routesSource = readFileSync(new URL('../modules/SecurityGovernance/routes.tsx', import.meta.url), 'utf8')
 const pagesSource = readFileSync(new URL('../pages/security-v3-pages.tsx', import.meta.url), 'utf8')
 const navigationSource = readFileSync(new URL('../lib/nocobase-portal-navigation.ts', import.meta.url), 'utf8')
+const sidebarSource = readFileSync(new URL('./security-component-sidebar.tsx', import.meta.url), 'utf8')
 
 test('访问策略下只保留合并后的策略发布二级入口', () => {
   const accessTabs = tabsSource.match(/access: \[[\s\S]*?\n  \],/)?.[0] ?? ''
@@ -17,7 +18,8 @@ test('访问策略下只保留合并后的策略发布二级入口', () => {
 test('旧访问策略地址跳转到合并后的策略发布页', () => {
   assert.match(routesSource, /path="\/security-governance\/access\/policies" element=\{<Navigate to="\/security-governance\/access\/publish" replace \/>\}/)
   assert.match(routesSource, /path="\/security-governance\/access\/publish" element=\{<SecurityPolicyPublishPage \/>\}/)
-  assert.match(navigationSource, /title: '访问策略', target: '\/security-governance\/access\/publish'/)
+  assert.match(sidebarSource, /label: '访问策略', path: '\/security-governance\/access\/publish'/)
+  assert.doesNotMatch(navigationSource, /title: '访问策略'/)
 })
 
 test('策略发布页同时支持策略编辑和逐行发布', () => {

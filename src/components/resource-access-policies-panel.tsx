@@ -133,7 +133,7 @@ function ResourceAccessDecisionLogs({ resourceId }: { resourceId: string }) {
       {error ? <div className="m-4 rounded-[8px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-3 text-[0.8125rem] text-[var(--status-danger-text)]">{error}</div> : null}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1380px] border-collapse text-left text-[0.8125rem]">
-          <thead className="bg-[var(--surface-muted)] text-[var(--text-muted)]"><tr>{['请求时间', '请求编号', '访问主体', 'API', '命中策略', '决策', '决策原因', '风险依据', '风险', '返回行数', '耗时'].map((label) => <th key={label} className="border-b border-[var(--line)] px-4 py-3 font-medium">{label}</th>)}</tr></thead>
+          <thead className="bg-[var(--surface-muted)] text-[var(--text-muted)]"><tr>{['请求时间', '请求编号', '数据应用', 'API', '命中策略', '决策', '决策原因', '风险依据', '风险', '返回行数', '耗时'].map((label) => <th key={label} className="border-b border-[var(--line)] px-4 py-3 font-medium">{label}</th>)}</tr></thead>
           <tbody>{logs.map((log) => (
             <tr key={String(log.id || log.request_id)} className="border-b border-[var(--line)] last:border-b-0 hover:bg-[var(--surface-muted)]">
               <td className="whitespace-nowrap px-4 py-3.5 text-[var(--text-secondary)]">{formatRequestTime(log.requested_at || log.createdAt)}</td>
@@ -171,7 +171,7 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
     columns: [
       { key: 'policy_code', label: '策略编码' },
       { key: 'policy_name', label: '策略名称' },
-      { key: 'subject', label: '访问主体' },
+      { key: 'subject', label: '数据应用' },
       { key: 'api_resource', label: 'API' },
       { key: 'output_mode', label: '输出模式' },
       { key: 'max_rows', label: '最大行数' },
@@ -183,7 +183,7 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
       { name: 'policy_kind', label: '策略类型', hidden: true, defaultValue: 'access_policy' },
       { name: 'policy_code', label: '策略编码', required: true, defaultValue: `ACCESS-${policyToken(resourceCode)}-${String(Date.now()).slice(-6)}` },
       { name: 'policy_name', label: '策略名称', required: true, defaultValue: `${resourceCode} 数据访问策略` },
-      { name: 'subject_id', label: '访问主体', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name', filter: { subject_status: 'enabled' } } },
+      { name: 'subject_id', label: '数据应用', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name', filter: { subject_status: 'enabled' } } },
       { name: 'api_resource_id', label: '已发布 API', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name', filter: { resource_id: resourceId, api_status: 'enabled', publish_status: 'success' } } },
       { name: 'scenario', label: '调用场景标识（请求头 X-Scenario）', required: true, defaultValue: 'resource-data-query' },
       { name: 'source_ips_json', label: '允许来源 IP/CIDR', type: 'json', defaultValue: [] },
@@ -232,7 +232,7 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
-        API Key 鉴权与主体 API 授权在访问主体中先行完成；这里只维护数据资源级策略：场景、来源 IP、时段、组织/区域范围、输出模式、查询与频率上限、风险阈值及异常访问处置。字段范围由 API 发布配置统一控制，不在访问策略中重复授权。
+        API Key 鉴权与主体 API 授权在数据应用中先行完成；这里只维护数据资源级策略：场景、来源 IP、时段、组织/区域范围、输出模式、查询与频率上限、风险阈值及异常访问处置。字段范围由 API 发布配置统一控制，不在访问策略中重复授权。
       </div>
       <SecurityV3CollectionPage config={config} embedded />
       <ResourceAccessDecisionLogs resourceId={resourceId} />

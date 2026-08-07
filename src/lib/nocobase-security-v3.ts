@@ -15,7 +15,7 @@ const SECURITY_VALUE_LABELS: Record<string, string> = {
   allow: '允许', deny: '拒绝', denied: '拒绝', limit: '限制', deny_alert: '拒绝并告警', processing: '处理中', closed: '已关闭',
   normal: '正常', notice: '提示', medium: '中风险', high: '高风险', critical: '严重',
   signature_invalid: '签名校验失败', replay_detected: '重复请求', policy_not_found: '未命中访问策略',
-  connection_test: '连接检查', validation: '数据校验', tagging: '标签执行', partial: '部分成功',
+  connection_test: '连接检查', validation: '数据校验', validation_preview: '资源抽样校验', resource_delivery_validation: '资源交付校验', resource_delivery_error: '资源交付异常', tagging: '标签执行', partial: '部分成功', warning: '告警',
 }
 
 export function sanitizeSecurityVisibleText(value: unknown) {

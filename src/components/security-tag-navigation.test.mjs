@@ -5,12 +5,14 @@ import test from 'node:test'
 const navigationSource = readFileSync(new URL('../lib/nocobase-portal-navigation.ts', import.meta.url), 'utf8')
 const tabsSource = readFileSync(new URL('./security-module-tabs.tsx', import.meta.url), 'utf8')
 const routesSource = readFileSync(new URL('../modules/SecurityGovernance/routes.tsx', import.meta.url), 'utf8')
+const sidebarSource = readFileSync(new URL('./security-component-sidebar.tsx', import.meta.url), 'utf8')
 
-test('标签管理作为独立一级导航并位于接入校验之后', () => {
+test('分类标签作为组件配置下的二级导航', () => {
   assert.match(
-    navigationSource,
-    /title: '接入校验'[\s\S]*title: '标签管理', target: '\/security-governance\/tags\/catalog'/,
+    sidebarSource,
+    /label: '分类标签', path: '\/security-governance\/tags\/catalog'/,
   )
+  assert.doesNotMatch(navigationSource, /title: '分类标签'/)
 })
 
 test('标签管理统一提供目录、规则和标注记录入口', () => {

@@ -93,7 +93,7 @@ function runtimeEvents(
   const decisionEvents: SecurityDashboardEvent[] = decisions.map((item) => ({
     time: clock(item.requested_at || item.createdAt), sortTime: timestamp(item.requested_at || item.createdAt), type: '访问决策',
     description: `${text(item.request_id, '访问请求')}：${text(item.decision_result, '已决策')}，返回 ${number(item.returned_rows)} 行。`,
-    user: text(record(item.subject).subject_name, '访问主体'), dept: text(record(item.api_resource).api_name, '数据 API'), risk: riskLabel(item.risk_level),
+    user: text(record(item.subject).subject_name, '数据应用'), dept: text(record(item.api_resource).api_name, '数据 API'), risk: riskLabel(item.risk_level),
   }))
   const riskEvents: SecurityDashboardEvent[] = risks.map((item) => ({
     time: clock(item.detected_at || item.createdAt), sortTime: timestamp(item.detected_at || item.createdAt), type: '风险事件',
@@ -154,7 +154,7 @@ export const EMPTY_SECURITY_DASHBOARD_V3_DATA: SecurityDashboardV3Data = {
 }
 
 export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3Data> {
-  const [allResources, allFields, allSources, apis, allPolicies, ingestLogs, decisions, risks, allTasks] = await Promise.all([
+  const [allResources, allFields, allSources, apis, allPolicies, ingestLogs, decisions, risks, allTasks, streamingRuns] = await Promise.all([
     listSecurityV3Records('eco_data_resources'),
     listSecurityV3Records('eco_resource_security_fields'),
     listSecurityV3Records('security_data_sources'),
@@ -164,6 +164,7 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
     listSecurityV3Records('security_policy_decision_logs', { appends: ['subject', 'api_resource'] }),
     listSecurityV3Records('security_risk_events', { appends: ['owner_user'] }),
     listSecurityV3Records('security_confidential_tasks', { appends: ['subject'] }),
+    listSecurityV3Records('security_streaming_runs'),
   ])
 
   const resources = allResources
@@ -186,6 +187,11 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
   const pendingTasks = tasks.filter((item) => ['pending', 'running'].includes(String(item.task_status))).length
   const completedTasks = tasks.filter((item) => ['success', 'completed'].includes(String(item.task_status))).length
   const failedTasks = tasks.filter((item) => item.task_status === 'failed').length
+  const streamingRunCount = streamingRuns.length
+  const streamingWindowCount = streamingRuns.reduce((total, run) => total + number(run.window_count), 0)
+  const streamingEventCount = streamingRuns.reduce((total, run) => total + number(run.processed_events), 0)
+  const streamingAnomalyCount = streamingRuns.reduce((total, run) => total + number(run.anomaly_count), 0)
+  const streamingAlert = streamingRuns.some((run) => ['warning', 'failed'].includes(String(run.status)))
   const allEvents = runtimeEvents(ingestLogs, decisions, risks, tasks)
   const taskEventCount = tasks.reduce((total, task) => total + (Array.isArray(record(task.execution_summary_json).events) ? (record(task.execution_summary_json).events as unknown[]).length : 0), 0)
   const durationValues = decisions.map((item) => number(item.duration_ms)).filter((value) => value > 0)
@@ -227,6 +233,7 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
     { label: '访问决策', value: decisions.length.toLocaleString(), detail: `拒绝 ${deniedRequests} 次`, tone: deniedRequests ? 'amber' : 'green' },
     { label: '风险待办', value: pendingRisks.toLocaleString(), detail: `风险事件总数 ${risks.length}`, tone: pendingRisks ? 'red' : 'green' },
     { label: '密态任务', value: tasks.length.toLocaleString(), detail: `待执行 ${pendingTasks} 项`, tone: pendingTasks ? 'amber' : 'blue' },
+    { label: '流式处理', value: streamingWindowCount.toLocaleString(), detail: `累计 ${streamingEventCount} 事件 / 异常 ${streamingAnomalyCount}`, tone: streamingAlert ? 'amber' : 'blue' },
   ]
 
   const source = sourceData(sources)

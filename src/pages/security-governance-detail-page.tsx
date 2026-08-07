@@ -9,6 +9,7 @@ import { ResourceAccessSubjectsPanel } from '../components/resource-access-subje
 import { ResourceAccessPoliciesPanel } from '../components/resource-access-policies-panel'
 import { ResourceHomomorphicPanel } from '../components/resource-homomorphic-panel'
 import { ResourceIngestSamplesPanel } from '../components/resource-physical-table-panel'
+import { ResourceIngestValidationDialog } from '../components/resource-ingest-validation-dialog'
 import { ScenicPanel, StatCard, TopicPill } from '../components/ui'
 import { canManageCatalogResources } from '../lib/admin-role'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
@@ -308,6 +309,7 @@ export function SecurityGovernanceDetailPage() {
     refresh,
   } = usePortalContext()
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isIngestValidationDialogOpen, setIsIngestValidationDialogOpen] = useState(false)
   const [editNotice, setEditNotice] = useState('')
   const canManageResources = canManageCatalogResources(session?.user.roles)
   const { data: securityDataSources } = useSecurityDataSources(canManageResources)
@@ -405,7 +407,7 @@ export function SecurityGovernanceDetailPage() {
     ['resourceFields', '资源字段'],
     ['physicalTable', '接入规则'],
     ['apiInfo', 'API 信息'],
-    ['accessSubjects', '访问主体'],
+    ['accessSubjects', '数据应用'],
     ['accessPolicies', '访问策略'],
     ['homomorphic', '同态加密'],
     ['lineage', '血缘关系'],
@@ -694,7 +696,20 @@ export function SecurityGovernanceDetailPage() {
 
       {activeTab === 'physicalTable' ? (
         <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
-          <SectionHeader icon={<Network className="h-5 w-5" />} title="接入规则" />
+          <SectionHeader
+            icon={<Network className="h-5 w-5" />}
+            title="接入规则"
+            action={canManageResources ? (
+              <button
+                type="button"
+                onClick={() => setIsIngestValidationDialogOpen(true)}
+                className="inline-flex h-10 items-center gap-2 rounded-full border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 text-[0.8125rem] font-medium text-[var(--text-secondary)] transition hover:border-[var(--primary)] hover:text-[var(--primary)]"
+              >
+                <Pencil className="h-4 w-4" />
+                配置资源校验
+              </button>
+            ) : null}
+          />
 
           {isSecurityRelationsLoading ? (
             <div className="py-10 text-center text-[0.875rem] text-[var(--text-muted)]">正在加载数据源与接入规则...</div>
@@ -793,7 +808,7 @@ export function SecurityGovernanceDetailPage() {
 
       {activeTab === 'accessSubjects' ? (
         <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
-          <SectionHeader icon={<Users className="h-5 w-5" />} title="访问主体" />
+          <SectionHeader icon={<Users className="h-5 w-5" />} title="数据应用" />
           <div className="mt-5">
             <ResourceAccessSubjectsPanel resourceId={String(item.id)} canManage={canManageResources} />
           </div>
@@ -863,25 +878,37 @@ export function SecurityGovernanceDetailPage() {
       ) : null}
 
       {canManageResources ? (
-        <ResourceEditDialog
-          open={isEditDialogOpen}
-          mode="edit"
-          variant="drawer"
-          resourceId={item.id}
-          categoryTree={categoryTree}
-          informationCategoryTree={informationCategoryTree}
-          sourceTree={sourceTree}
-          regionTree={regionTree}
-          editOptions={editOptions}
-          securityGovernanceMode
-          dataSourceOptions={dataSourceOptions}
-          onClose={() => setIsEditDialogOpen(false)}
-          onSaved={async () => {
-            await refresh()
-            await ensureDefaultSecurityApi(item.id).catch(() => undefined)
-            setEditNotice('数据资源已保存，详情信息和唯一查询 API 已重新同步。')
-          }}
-        />
+        <>
+          <ResourceEditDialog
+            open={isEditDialogOpen}
+            mode="edit"
+            variant="drawer"
+            resourceId={item.id}
+            categoryTree={categoryTree}
+            informationCategoryTree={informationCategoryTree}
+            sourceTree={sourceTree}
+            regionTree={regionTree}
+            editOptions={editOptions}
+            securityGovernanceMode
+            dataSourceOptions={dataSourceOptions}
+            onClose={() => setIsEditDialogOpen(false)}
+            onSaved={async () => {
+              await refresh()
+              await ensureDefaultSecurityApi(item.id).catch(() => undefined)
+              setEditNotice('数据资源已保存，详情信息和唯一查询 API 已重新同步。')
+            }}
+          />
+          <ResourceIngestValidationDialog
+            open={isIngestValidationDialogOpen}
+            resourceId={item.id}
+            availableFields={ingestSamples?.columns.map((column) => column.code) ?? item.fieldRows.map((field) => field.englishName).filter(Boolean)}
+            onClose={() => setIsIngestValidationDialogOpen(false)}
+            onSaved={async () => {
+              await refreshIngestSamples()
+              setEditNotice('资源级接入校验配置已保存，并已用于本资源的规则抽样。')
+            }}
+          />
+        </>
       ) : null}
 
     </div>

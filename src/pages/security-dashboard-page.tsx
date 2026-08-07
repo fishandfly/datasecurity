@@ -19,9 +19,11 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
+import { SecuritySankeyCard } from '../components/security-sankey-card'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
+import { fetchRealtimeMonitorData, type RealtimeMonitorData } from '../lib/security-realtime-monitor'
 import { EMPTY_SECURITY_DASHBOARD_V3_DATA, loadSecurityDashboardV3Data, type SecurityDashboardCoreMetric } from '../lib/security-dashboard-v3-data'
-import { type SecurityDashboardDistributionItem, type SecurityDashboardMetrics, type SecurityDashboardModuleSummary, type SecurityDashboardRealtimeItem, type SecurityDashboardSourceTrendPoint, type SecurityDashboardSourceTrendSeries } from '../lib/security-dashboard-data'
+import { type SecurityDashboardDistributionItem, type SecurityDashboardMetrics, type SecurityDashboardRealtimeItem, type SecurityDashboardSourceTrendPoint, type SecurityDashboardSourceTrendSeries } from '../lib/security-dashboard-data'
 import { toErrorMessage } from '../lib/nocobase-client'
 import { cn } from '../lib/utils'
 
@@ -141,48 +143,6 @@ function toneClasses(tone: 'blue' | 'green' | 'amber' | 'red') {
   }[tone]
 }
 
-function sourceStatusToneClass(status: string) {
-  if (status.includes('未') || status.includes('异常') || status.includes('失败')) return 'text-[#ef4444]'
-  if (status.includes('延迟') || status.includes('待') || status.includes('处理中')) return 'text-[#d97706]'
-  return 'text-[#10b981]'
-}
-
-function ModuleSummaryCard({ item, withEmbed }: { item: SecurityDashboardModuleSummary; withEmbed: (path: string) => string }) {
-  const icon = {
-    'data-access': <DatabaseZap className="h-5 w-5" />,
-    'resource-control': <Workflow className="h-5 w-5" />,
-    'access-control': <ShieldAlert className="h-5 w-5" />,
-    'risk-events': <Bell className="h-5 w-5" />,
-    'homomorphic-encryption': <LockKeyhole className="h-5 w-5" />,
-  }[item.id]
-
-  return (
-    <Link
-      to={withEmbed(item.path)}
-      className="security-dashboard-module-card group relative overflow-hidden rounded-[8px] border border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-4 transition hover:-translate-y-[1px] hover:border-[rgba(var(--theme-soft-rgb),0.34)] hover:shadow-[var(--shadow-medium)]"
-    >
-      <div className="security-dashboard-card-scan" />
-      <div className="relative z-[1] flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[0.8125rem] font-semibold text-[var(--text-main)]">{item.title}</div>
-          <div className="mt-3 flex items-end gap-2">
-            <span className="text-[1.75rem] font-semibold leading-none text-[var(--text-main)]">{item.value}</span>
-            <span className="pb-1 text-[0.75rem] text-[var(--text-muted)]">{item.unit}</span>
-          </div>
-        </div>
-        <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] border', toneClasses(item.tone))}>{icon}</div>
-      </div>
-      <div className="relative z-[1] mt-3 flex flex-wrap gap-2">
-        <span className={cn('rounded-full border px-2.5 py-1 text-[0.75rem] font-medium', toneClasses(item.tone))}>{item.status}</span>
-      </div>
-      <div className="relative z-[1] mt-3 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">{item.helper}</div>
-      <div className="relative z-[1] mt-3 grid gap-2 text-[0.75rem] text-[var(--text-muted)] sm:grid-cols-2">
-        <span className="rounded-[6px] bg-[var(--surface-raised)] px-2.5 py-2">{item.primaryMetric}</span>
-        <span className="rounded-[6px] bg-[var(--surface-raised)] px-2.5 py-2">{item.secondaryMetric}</span>
-      </div>
-    </Link>
-  )
-}
 
 function RealtimeStatusCard({ item }: { item: SecurityDashboardRealtimeItem }) {
   return (
@@ -194,67 +154,6 @@ function RealtimeStatusCard({ item }: { item: SecurityDashboardRealtimeItem }) {
       </div>
       <div className="mt-2 text-[1.45rem] font-semibold leading-none text-[var(--text-main)]">{item.value}</div>
       <div className="mt-3 text-[0.75rem] leading-5 text-[var(--text-secondary)]">{item.detail}</div>
-    </div>
-  )
-}
-
-function OperationsRadar({ metrics }: { metrics: SecurityDashboardMetrics }) {
-  const nodes = [
-    { label: '接入', value: `${formatCount(metrics.sourceCount)}`, icon: <DatabaseZap className="h-4 w-4" />, className: 'left-[6%] top-[14%]' },
-    { label: '资源', value: `${formatCount(metrics.resourceCount)}`, icon: <ServerCog className="h-4 w-4" />, className: 'right-[5%] top-[18%]' },
-    { label: '策略', value: `${formatCount(metrics.activePolicies)}`, icon: <ShieldAlert className="h-4 w-4" />, className: 'bottom-[14%] left-[9%]' },
-    { label: '同态', value: `${metrics.homomorphicCompletedCount}/${metrics.homomorphicTaskCount}`, icon: <LockKeyhole className="h-4 w-4" />, className: 'bottom-[10%] right-[8%]' },
-  ]
-
-  return (
-    <div className="security-dashboard-radar relative min-h-[320px] overflow-hidden rounded-[8px] border border-[rgba(var(--theme-soft-rgb),0.22)] bg-[linear-gradient(140deg,rgba(var(--theme-soft-rgb),0.10),rgba(var(--theme-support-rgb),0.08),var(--surface-raised))]">
-      <div className="security-dashboard-radar-grid" />
-      <div className="security-dashboard-radar-sweep" />
-      <div className="security-dashboard-data-stream security-dashboard-data-stream-a" />
-      <div className="security-dashboard-data-stream security-dashboard-data-stream-b" />
-      <div className="absolute left-1/2 top-1/2 z-[1] flex h-36 w-36 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border border-[rgba(var(--theme-soft-rgb),0.34)] bg-[color-mix(in_srgb,var(--surface-raised-strong)_72%,transparent)] shadow-[0_0_44px_rgba(var(--theme-soft-rgb),0.16)]">
-        <Radar className="h-6 w-6 text-[var(--primary)]" />
-        <div className="mt-2 text-[2.35rem] font-semibold leading-none text-[var(--text-main)]">{metrics.overallScore}</div>
-        <div className="mt-1 text-[0.75rem] text-[var(--text-muted)]">态势评分</div>
-      </div>
-      {nodes.map((node, index) => (
-        <div
-          key={node.label}
-          className={cn('security-dashboard-radar-node absolute z-[2] flex min-w-28 items-center gap-2 rounded-[8px] border border-[rgba(var(--theme-soft-rgb),0.24)] bg-[color-mix(in_srgb,var(--surface-raised-strong)_82%,transparent)] px-3 py-2 shadow-[var(--shadow-soft)]', node.className)}
-          style={{ animationDelay: `${index * 180}ms` }}
-        >
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[7px] bg-[rgba(var(--theme-soft-rgb),0.12)] text-[var(--primary)]">{node.icon}</span>
-          <span className="min-w-0">
-            <span className="block text-[0.72rem] text-[var(--text-muted)]">{node.label}</span>
-            <span className="block text-[0.95rem] font-semibold leading-5 text-[var(--text-main)]">{node.value}</span>
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function CapabilityStrip({ metrics }: { metrics: SecurityDashboardMetrics }) {
-  const strips = [
-    { label: '分类分级', value: metrics.classificationCoverage, color: '#3b82f6' },
-    { label: '接入完整性', value: metrics.integrityPassRate, color: '#14b8a6' },
-    { label: '策略启用', value: metrics.enabledPolicyRatio, color: '#f59e0b' },
-    { label: '脱敏覆盖', value: metrics.desensitizationCoverage, color: '#10b981' },
-  ]
-
-  return (
-    <div className="grid gap-2">
-      {strips.map((item) => (
-        <div key={item.label} className="rounded-[7px] border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-muted)_82%,transparent)] px-3 py-2">
-          <div className="flex items-center justify-between gap-3 text-[0.75rem]">
-            <span className="text-[var(--text-secondary)]">{item.label}</span>
-            <span className="font-semibold text-[var(--text-main)]">{item.value}%</span>
-          </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--table-track)]">
-            <div className="security-dashboard-capability-bar h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, item.value))}%`, backgroundColor: item.color }} />
-          </div>
-        </div>
-      ))}
     </div>
   )
 }
@@ -310,121 +209,8 @@ function DonutChart({ items }: { items: SecurityDashboardDistributionItem[] }) {
   )
 }
 
-function GaugeMeter({ label, value, tone }: { label: string; value: number; tone: 'blue' | 'green' }) {
-  const color = tone === 'blue' ? '#3b82f6' : '#10b981'
-  const dash = Math.max(0, Math.min(value, 100)) * 1.26
-  return (
-    <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-4">
-      <div className="flex items-center justify-between text-[0.8125rem]">
-        <span className="text-[var(--text-secondary)]">{label}</span>
-        <span className="font-semibold text-[var(--text-main)]">{value}%</span>
-      </div>
-      <svg viewBox="0 0 140 78" className="mt-2 h-20 w-full" aria-hidden="true">
-        <path d="M18 68a52 52 0 0 1 104 0" fill="none" stroke="var(--line)" strokeWidth="12" strokeLinecap="round" />
-        <path
-          d="M18 68a52 52 0 0 1 104 0"
-          fill="none"
-          stroke={color}
-          strokeWidth="12"
-          strokeLinecap="round"
-          strokeDasharray={`${dash} 126`}
-        />
-        <circle cx="70" cy="68" r="4" fill={color} />
-      </svg>
-    </div>
-  )
-}
 
-function SourceTrendChart({
-  series,
-  points,
-}: {
-  series: SecurityDashboardSourceTrendSeries[]
-  points: SecurityDashboardSourceTrendPoint[]
-}) {
-  const maxValue = Math.max(...points.flatMap((point) => Object.values(point.values)), 1)
-  const width = 620
-  const startX = 44
-  const step = points.length <= 1 ? 0 : (width - 64) / (points.length - 1)
-  return (
-    <div>
-      <svg viewBox="0 0 620 220" className="h-[220px] w-full" role="img" aria-label="数据源接入量趋势">
-        <defs>
-          <linearGradient id="source-trend-surface" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="rgba(24,128,255,0.14)" />
-            <stop offset="100%" stopColor="rgba(24,128,255,0)" />
-          </linearGradient>
-        </defs>
-        <rect x="40" y="24" width="560" height="166" rx="8" fill="url(#source-trend-surface)" />
-        {[0, 1, 2, 3].map((line) => (
-          <line key={line} x1="40" x2="600" y1={32 + line * 44} y2={32 + line * 44} stroke="var(--line)" strokeDasharray="4 6" />
-        ))}
-        {series.map((item) => (
-          <polyline
-            key={item.key}
-            className="security-dashboard-line-draw"
-            points={points
-              .map((point, index) => {
-                const value = point.values[item.key] ?? 0
-                const x = startX + index * step
-                const y = 190 - (value / maxValue) * 150
-                return `${x},${y}`
-              })
-              .join(' ')}
-            fill="none"
-            stroke={item.color}
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        ))}
-        {series.map((item) =>
-          points.map((point, index) => {
-            const value = point.values[item.key] ?? 0
-            const x = points.length <= 1 ? 320 : startX + index * step
-            const y = 190 - (value / maxValue) * 150
-            return (
-              <g key={`${item.key}-${point.label}`}>
-                <circle cx={x} cy={y} r="5" fill={item.color} opacity="0.18" />
-                <circle className="security-dashboard-live-dot" cx={x} cy={y} r="2.7" fill={item.color} />
-              </g>
-            )
-          }),
-        )}
-        {points.map((point, index) => (
-          <text key={point.label} x={points.length <= 1 ? 320 : startX + index * step} y="212" textAnchor="middle" className="fill-[var(--text-muted)] text-[11px]">
-            {point.label}
-          </text>
-        ))}
-      </svg>
-      <div className="flex flex-wrap gap-3">
-        {series.map((item) => (
-          <span key={item.key} className="inline-flex items-center gap-2 text-[0.75rem] text-[var(--text-secondary)]">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-            {item.label}
-          </span>
-        ))}
-      </div>
-    </div>
-  )
-}
 
-function PerformanceBars({ values }: { values: number[] }) {
-  const displayValues = values.length > 0 ? values : [0]
-  return (
-    <div className="flex h-28 items-end gap-2 border-b border-[var(--line)] px-1">
-      {displayValues.map((value, index) => (
-        <div key={`${value}-${index}`} className="flex flex-1 flex-col items-center gap-2">
-          <div
-            className="security-dashboard-performance-bar w-full rounded-t-[4px] bg-[linear-gradient(180deg,#67ceff,#1880ff)]"
-            style={{ height: `${value}%` }}
-            title={`${value}%`}
-          />
-        </div>
-      ))}
-    </div>
-  )
-}
 
 function SecurityDataFlow({ metrics, coreMetrics }: { metrics: SecurityDashboardMetrics; coreMetrics: SecurityDashboardCoreMetric[] }) {
   const metricValue = (key: SecurityDashboardCoreMetric['key']) => coreMetrics.find((item) => item.key === key)?.value ?? 0
@@ -433,7 +219,7 @@ function SecurityDataFlow({ metrics, coreMetrics }: { metrics: SecurityDashboard
     { id: 'validation', x: 260, width: 260, title: '接入校验', value: `完整性 ${metrics.integrityPassRate}%`, tone: 'blue' },
     { id: 'control', x: 540, width: 260, title: '数据管控', value: `${metrics.resourceCount} 项资源`, tone: 'green' },
     { id: 'access', x: 820, width: 280, title: '访问控制', value: `${metrics.activePolicies} 条启用策略`, tone: 'amber' },
-    { id: 'subject', x: 1120, width: 340, title: '访问主体', value: '典型访问对象', tone: 'violet' },
+    { id: 'subject', x: 1120, width: 340, title: '数据应用', value: '典型数据应用', tone: 'violet' },
   ] as const
   const subNodes = [
     { x: 40, y: 170, width: 180, height: 64, title: '量测数据', value: '中台统一供给', tone: 'cyan' },
@@ -535,6 +321,10 @@ export function SecurityDashboardPage() {
   const [dashboardData, setDashboardData] = useState(EMPTY_SECURITY_DASHBOARD_V3_DATA)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [realtimeTab, setRealtimeTab] = useState<'overview' | 'flow' | 'homomorphic'>('overview')
+  const [sankeyData, setSankeyData] = useState<RealtimeMonitorData | null>(null)
+  const [sankeyLoading, setSankeyLoading] = useState(false)
+  const [sankeyError, setSankeyError] = useState('')
   const refresh = useCallback(async () => {
     setLoading(true)
     setError('')
@@ -547,8 +337,20 @@ export function SecurityDashboardPage() {
     }
   }, [])
   useEffect(() => { void refresh() }, [refresh])
+  const refreshSankey = useCallback(async () => {
+    setSankeyLoading(true)
+    setSankeyError('')
+    try {
+      setSankeyData(await fetchRealtimeMonitorData(0))
+    } catch (currentError) {
+      setSankeyError(toErrorMessage(currentError, '流转数据读取失败'))
+    } finally {
+      setSankeyLoading(false)
+    }
+  }, [])
+  useEffect(() => { void refreshSankey() }, [refreshSankey])
 
-  const { metrics, moduleSummaries, realtimeItems, events, abnormalTypes, topActors, sourceTrend, sourceHealth } = dashboardData
+  const { metrics, realtimeItems, events, abnormalTypes, topActors } = dashboardData
 
   const coreMetricIcons: Record<SecurityDashboardCoreMetric['key'], React.ReactNode> = {
     resources: <Workflow className="h-5 w-5" />, apis: <DatabaseZap className="h-5 w-5" />, policies: <SlidersHorizontal className="h-5 w-5" />,
@@ -565,234 +367,155 @@ export function SecurityDashboardPage() {
       ) : null}
       {error ? <div className="rounded-[8px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-5 py-3 text-[0.875rem] text-[var(--status-danger-text)]">{error}</div> : null}
 
-      <section className="security-dashboard-hero relative overflow-hidden rounded-[8px] border border-[rgba(var(--theme-soft-rgb),0.24)] bg-[linear-gradient(135deg,var(--surface-hero-start),var(--surface-hero-end))] p-5 shadow-[var(--shadow-elevated)]">
-        <div className="security-dashboard-hero-grid" />
-        <div className="relative z-[1] grid gap-5 2xl:grid-cols-[minmax(360px,0.92fr)_minmax(0,1.08fr)]">
-          <div className="grid gap-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(var(--theme-soft-rgb),0.24)] bg-[rgba(var(--theme-soft-rgb),0.08)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--primary)]">
-                  <RadioTower className="h-4 w-4" />
-                  实时安全运行中心
-                </div>
-                <h1 className="mt-3 text-[1.55rem] font-semibold leading-tight text-[var(--text-main)]">安全态势看板</h1>
-                <div className="mt-1 text-[0.8125rem] text-[var(--text-secondary)]">聚合数据接入、资源管控、访问控制与同态加密的核心运行指标。</div>
-              </div>
-              <button type="button" onClick={() => void refresh()} className="inline-flex items-center gap-2 rounded-[8px] border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-raised)_82%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--text-secondary)]">
-                <CheckCircle2 className="h-4 w-4 text-[#10b981]" />
-                真实数据已汇聚
-                <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+      <SectionPanel
+        title="实时运行监控"
+        action={
+          <div className="flex items-center rounded-[6px] border border-[var(--line)] bg-[var(--surface-muted)] p-0.5">
+            {([
+              ['overview', '实时运行情况'],
+              ['flow', '分层策略流转'],
+              ['homomorphic', '同态加密流转'],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setRealtimeTab(key)}
+                className={cn(
+                  'h-8 rounded-[4px] px-3 text-[0.75rem] font-medium transition',
+                  realtimeTab === key
+                    ? 'bg-[var(--surface-raised)] text-[var(--text-main)] shadow-[var(--shadow-soft)]'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-main)]',
+                )}
+              >
+                {label}
               </button>
-            </div>
-
-            <OperationsRadar metrics={metrics} />
+            ))}
           </div>
-
-          <div className="grid gap-4">
-            <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
-              <div className="rounded-[8px] border border-[rgba(var(--theme-soft-rgb),0.20)] bg-[color-mix(in_srgb,var(--surface-raised)_88%,transparent)] p-4">
-                <div className="flex items-center gap-2 text-[0.8125rem] font-medium text-[var(--text-secondary)]">
-                  <Gauge className="h-4 w-4 text-[var(--primary)]" />
-                  整体综合情况
-                </div>
-                <div className="mt-4 flex items-end gap-3">
-                  <span className="text-[3.25rem] font-semibold leading-none text-[var(--text-main)]">{metrics.overallScore}</span>
-                  <span className="pb-2 text-[0.875rem] text-[var(--text-muted)]">/ 100</span>
-                </div>
-                <div className="mt-2 flex items-center gap-2 text-[0.75rem] text-[var(--text-secondary)]">
-                  <Zap className="h-4 w-4 text-[#f59e0b]" />
-                  告警 {formatCount(metrics.alerts)} 项，队列 {formatCount(metrics.queueSize)} 项
-                </div>
-              </div>
-              <CapabilityStrip metrics={metrics} />
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-5">
-              {moduleSummaries.map((item) => (
-                <ModuleSummaryCard key={item.id} item={item} withEmbed={withEmbed} />
+        }
+      >
+        {realtimeTab === 'overview' ? (
+          <div className="space-y-5">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+              {realtimeItems.map((item) => (
+                <RealtimeStatusCard key={item.label} item={item} />
               ))}
             </div>
-          </div>
-        </div>
-      </section>
 
-      <SectionPanel title="实时运行情况">
-        <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-5">
-          {realtimeItems.map((item) => (
-            <RealtimeStatusCard key={item.label} item={item} />
-          ))}
-        </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+              {dashboardData.coreMetrics.map((item) => (
+                <Link key={item.key} to={withEmbed(item.path)}>
+                  <MetricCard title={item.label} value={formatCount(item.value)} helper={item.helper} values={item.trend} icon={coreMetricIcons[item.key]} tone={item.tone} />
+                </Link>
+              ))}
+            </div>
+
+            <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
+              <SectionPanel
+                className="scroll-mt-6"
+                title="实时安全事件流"
+                action={
+                  <div className="flex items-center gap-2">
+                    <button className="inline-flex h-9 items-center gap-2 rounded-[6px] border border-[var(--line)] px-3 text-[0.8125rem] text-[var(--text-secondary)]">
+                      <Search className="h-4 w-4" />
+                      事件类型
+                    </button>
+                    <button className="inline-flex h-9 items-center gap-2 rounded-[6px] border border-[var(--line)] px-3 text-[0.8125rem] text-[var(--text-secondary)]">
+                      <AlertCircle className="h-4 w-4" />
+                      风险等级
+                    </button>
+                  </div>
+                }
+              >
+                <span id="event-stream" className="block -translate-y-6" />
+                <div className="space-y-2">
+                  {events.map((event) => (
+                    <div key={`${event.time}-${event.description}`} className="security-dashboard-event-row grid gap-3 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-3 lg:grid-cols-[88px_128px_minmax(0,1fr)_112px_80px] lg:items-center">
+                      <div className="text-[0.8125rem] font-medium text-[var(--text-main)]">{event.time}</div>
+                      <div className="flex items-center gap-2 text-[0.8125rem] text-[var(--text-secondary)]">
+                        <Bell className="h-4 w-4 text-[var(--primary)]" />
+                        {event.type}
+                      </div>
+                      <div className="min-w-0 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">{event.description}</div>
+                      <div className="text-[0.8125rem] text-[var(--text-muted)]">{event.user}</div>
+                      <span
+                        className={cn(
+                          'w-fit rounded-full px-2.5 py-1 text-[0.75rem] font-medium',
+                          event.risk === '高'
+                            ? 'bg-[var(--status-danger-bg)] text-[var(--status-danger-text)]'
+                            : event.risk === '中'
+                              ? 'bg-[var(--status-warning-bg)] text-[var(--status-warning-text)]'
+                              : 'bg-[var(--status-success-bg)] text-[var(--status-success-text)]',
+                        )}
+                      >
+                        {event.risk}风险
+                      </span>
+                    </div>
+                  ))}
+                  {events.length === 0 ? (
+                    <div className="rounded-[8px] border border-dashed border-[var(--line)] bg-[var(--surface-muted)] px-4 py-8 text-center text-[0.8125rem] text-[var(--text-muted)]">
+                      后台暂无可用于安全事件流的安全档案或目录资源数据。
+                    </div>
+                  ) : null}
+                </div>
+                <Link to={withEmbed('/security-governance/access/audit')} className="mt-4 inline-flex text-[0.8125rem] font-medium text-[var(--primary)]">
+                  查看全部日志
+                </Link>
+              </SectionPanel>
+
+              <SectionPanel title="访问异常分析" className="scroll-mt-6">
+                <span id="access-risk" className="block -translate-y-6" />
+                <DonutChart items={abnormalTypes} />
+                <div className="mt-5 overflow-hidden rounded-[8px] border border-[var(--line)]">
+                  <div className="hidden grid-cols-[minmax(0,1fr)_88px_82px_78px] bg-[var(--surface-muted)] px-3 py-2 text-[0.75rem] text-[var(--text-muted)] md:grid">
+                    <span>用户 / 部门</span>
+                    <span>异常次数</span>
+                    <span>最后异常</span>
+                    <span>状态</span>
+                  </div>
+                  {topActors.map((item) => (
+                    <div key={`${item.user}-${item.dept}`} className="grid gap-2 border-t border-[var(--line)] px-3 py-3 text-[0.8125rem] md:grid-cols-[minmax(0,1fr)_88px_82px_78px] md:items-center md:py-2">
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium text-[var(--text-main)]">{item.user}</span>
+                        <span className="block truncate text-[0.75rem] text-[var(--text-muted)]">{item.dept}</span>
+                      </span>
+                      <span className="flex items-center justify-between gap-3 text-[var(--text-secondary)] md:block">
+                        <span className="text-[var(--text-muted)] md:hidden">异常次数</span>
+                        {item.count}
+                      </span>
+                      <span className="flex items-center justify-between gap-3 text-[var(--text-secondary)] md:block">
+                        <span className="text-[var(--text-muted)] md:hidden">最后异常</span>
+                        {item.lastSeen}
+                      </span>
+                      <span className="flex items-center justify-between gap-3 text-[var(--primary)] md:block">
+                        <span className="text-[var(--text-muted)] md:hidden">状态</span>
+                        {item.status}
+                      </span>
+                    </div>
+                  ))}
+                  {topActors.length === 0 ? (
+                    <div className="border-t border-[var(--line)] px-3 py-8 text-center text-[0.8125rem] text-[var(--text-muted)]">
+                      暂无责任人异常统计。
+                    </div>
+                  ) : null}
+                </div>
+              </SectionPanel>
+            </div>
+
+          </div>
+        ) : sankeyLoading && !sankeyData ? (
+          <div className="py-10 text-center text-[0.8125rem] text-[var(--text-muted)]">正在加载流转数据...</div>
+        ) : sankeyError && !sankeyData ? (
+          <div className="py-10 text-center text-[0.8125rem] text-[var(--status-danger-text)]">{sankeyError}</div>
+        ) : sankeyData ? (
+          (() => {
+            const graphId = realtimeTab === 'flow' ? 'flow' : 'homomorphic'
+            const graph = sankeyData.graphs.find((item) => item.id === graphId) ?? sankeyData.graphs[0]
+            const index = sankeyData.graphs.findIndex((item) => item.id === graph.id)
+            return <SecuritySankeyCard graph={graph} index={index} collections={sankeyData.collections} />
+          })()
+        ) : null}
       </SectionPanel>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-        {dashboardData.coreMetrics.map((item) => (
-          <Link key={item.key} to={withEmbed(item.path)}>
-            <MetricCard title={item.label} value={formatCount(item.value)} helper={item.helper} values={item.trend} icon={coreMetricIcons[item.key]} tone={item.tone} />
-          </Link>
-        ))}
-      </div>
-
-      <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
-        <SectionPanel
-          className="scroll-mt-6"
-          title="实时安全事件流"
-          action={
-            <div className="flex items-center gap-2">
-              <button className="inline-flex h-9 items-center gap-2 rounded-[6px] border border-[var(--line)] px-3 text-[0.8125rem] text-[var(--text-secondary)]">
-                <Search className="h-4 w-4" />
-                事件类型
-              </button>
-              <button className="inline-flex h-9 items-center gap-2 rounded-[6px] border border-[var(--line)] px-3 text-[0.8125rem] text-[var(--text-secondary)]">
-                <AlertCircle className="h-4 w-4" />
-                风险等级
-              </button>
-            </div>
-          }
-        >
-          <span id="event-stream" className="block -translate-y-6" />
-          <div className="space-y-2">
-            {events.map((event) => (
-              <div key={`${event.time}-${event.description}`} className="security-dashboard-event-row grid gap-3 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-3 lg:grid-cols-[88px_128px_minmax(0,1fr)_112px_80px] lg:items-center">
-                <div className="text-[0.8125rem] font-medium text-[var(--text-main)]">{event.time}</div>
-                <div className="flex items-center gap-2 text-[0.8125rem] text-[var(--text-secondary)]">
-                  <Bell className="h-4 w-4 text-[var(--primary)]" />
-                  {event.type}
-                </div>
-                <div className="min-w-0 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">{event.description}</div>
-                <div className="text-[0.8125rem] text-[var(--text-muted)]">{event.user}</div>
-                <span
-                  className={cn(
-                    'w-fit rounded-full px-2.5 py-1 text-[0.75rem] font-medium',
-                    event.risk === '高'
-                      ? 'bg-[var(--status-danger-bg)] text-[var(--status-danger-text)]'
-                      : event.risk === '中'
-                        ? 'bg-[var(--status-warning-bg)] text-[var(--status-warning-text)]'
-                        : 'bg-[var(--status-success-bg)] text-[var(--status-success-text)]',
-                  )}
-                >
-                  {event.risk}风险
-                </span>
-              </div>
-            ))}
-            {events.length === 0 ? (
-              <div className="rounded-[8px] border border-dashed border-[var(--line)] bg-[var(--surface-muted)] px-4 py-8 text-center text-[0.8125rem] text-[var(--text-muted)]">
-                后台暂无可用于安全事件流的安全档案或目录资源数据。
-              </div>
-            ) : null}
-          </div>
-          <Link to={withEmbed('/security-governance/access/audit')} className="mt-4 inline-flex text-[0.8125rem] font-medium text-[var(--primary)]">
-            查看全部日志
-          </Link>
-        </SectionPanel>
-
-        <SectionPanel title="访问异常分析" className="scroll-mt-6">
-          <span id="access-risk" className="block -translate-y-6" />
-          <DonutChart items={abnormalTypes} />
-          <div className="mt-5 overflow-hidden rounded-[8px] border border-[var(--line)]">
-            <div className="hidden grid-cols-[minmax(0,1fr)_88px_82px_78px] bg-[var(--surface-muted)] px-3 py-2 text-[0.75rem] text-[var(--text-muted)] md:grid">
-              <span>用户 / 部门</span>
-              <span>异常次数</span>
-              <span>最后异常</span>
-              <span>状态</span>
-            </div>
-            {topActors.map((item) => (
-              <div key={`${item.user}-${item.dept}`} className="grid gap-2 border-t border-[var(--line)] px-3 py-3 text-[0.8125rem] md:grid-cols-[minmax(0,1fr)_88px_82px_78px] md:items-center md:py-2">
-                <span className="min-w-0">
-                  <span className="block truncate font-medium text-[var(--text-main)]">{item.user}</span>
-                  <span className="block truncate text-[0.75rem] text-[var(--text-muted)]">{item.dept}</span>
-                </span>
-                <span className="flex items-center justify-between gap-3 text-[var(--text-secondary)] md:block">
-                  <span className="text-[var(--text-muted)] md:hidden">异常次数</span>
-                  {item.count}
-                </span>
-                <span className="flex items-center justify-between gap-3 text-[var(--text-secondary)] md:block">
-                  <span className="text-[var(--text-muted)] md:hidden">最后异常</span>
-                  {item.lastSeen}
-                </span>
-                <span className="flex items-center justify-between gap-3 text-[var(--primary)] md:block">
-                  <span className="text-[var(--text-muted)] md:hidden">状态</span>
-                  {item.status}
-                </span>
-              </div>
-            ))}
-            {topActors.length === 0 ? (
-              <div className="border-t border-[var(--line)] px-3 py-8 text-center text-[0.8125rem] text-[var(--text-muted)]">
-                暂无责任人异常统计。
-              </div>
-            ) : null}
-          </div>
-        </SectionPanel>
-      </div>
-
-      <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]">
-        <SectionPanel title="数据源接入状态" className="scroll-mt-6">
-          <span id="source-status" className="block -translate-y-6" />
-          <SourceTrendChart series={sourceTrend.series} points={sourceTrend.points} />
-          <div className="mt-5 overflow-hidden rounded-[8px] border border-[var(--line)]">
-            <div className="hidden grid-cols-[minmax(0,1fr)_110px_120px_132px_88px] bg-[var(--surface-muted)] px-3 py-2 text-[0.75rem] text-[var(--text-muted)] lg:grid">
-              <span>数据源名称</span>
-              <span>当前状态</span>
-              <span>接入成功率</span>
-              <span>最后接入时间</span>
-              <span>操作</span>
-            </div>
-            {sourceHealth.map((source) => (
-              <div key={source.name} className="grid gap-2 border-t border-[var(--line)] px-3 py-3 text-[0.8125rem] lg:grid-cols-[minmax(0,1fr)_110px_120px_132px_88px] lg:items-center">
-                <span className="font-medium text-[var(--text-main)]">{source.name}</span>
-                <span className={cn('flex items-center justify-between gap-3 lg:block', sourceStatusToneClass(source.status))}>
-                  <span className="text-[var(--text-muted)] lg:hidden">当前状态</span>
-                  {source.status}
-                </span>
-                <span className="flex items-center justify-between gap-3 text-[var(--text-secondary)] lg:block">
-                  <span className="text-[var(--text-muted)] lg:hidden">接入成功率</span>
-                  {source.rate}
-                </span>
-                <span className="flex items-center justify-between gap-3 text-[var(--text-secondary)] lg:block">
-                  <span className="text-[var(--text-muted)] lg:hidden">最后接入</span>
-                  {source.time}
-                </span>
-                <Link to={withEmbed('/security-governance/ingest/sources')} className="text-left text-[var(--primary)]">{source.action}</Link>
-              </div>
-            ))}
-            {sourceHealth.length === 0 ? (
-              <div className="border-t border-[var(--line)] px-3 py-8 text-center text-[0.8125rem] text-[var(--text-muted)]">
-                暂无可从后台派生的数据源接入状态。
-              </div>
-            ) : null}
-          </div>
-        </SectionPanel>
-
-        <SectionPanel title="访问策略运行" className="scroll-mt-6">
-          <span id="policy-engine" className="block -translate-y-6" />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <GaugeMeter label="策略启用率" value={metrics.enabledPolicyRatio} tone="blue" />
-            <GaugeMeter label="脱敏覆盖率" value={metrics.desensitizationCoverage} tone="green" />
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-4">
-              <div className="flex items-center gap-2 text-[0.8125rem] text-[var(--text-secondary)]">
-                <Cpu className="h-4 w-4 text-[var(--primary)]" />
-                规则执行平均耗时
-              </div>
-              <div className="mt-2 text-[1.5rem] font-semibold text-[var(--text-main)]">{metrics.decisionLatencyMs} ms</div>
-            </div>
-            <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-4">
-              <div className="flex items-center gap-2 text-[0.8125rem] text-[var(--text-secondary)]">
-                <Workflow className="h-4 w-4 text-[var(--primary)]" />
-                当前队列任务数
-              </div>
-              <div className="mt-2 text-[1.5rem] font-semibold text-[var(--text-main)]">{metrics.queueSize}</div>
-            </div>
-          </div>
-          <div className="mt-5">
-            <div className="mb-2 flex items-center justify-between text-[0.8125rem] text-[var(--text-secondary)]">
-              <span>当前来源负载对比</span>
-              <span>峰值 {metrics.loadBars.length ? Math.max(...metrics.loadBars) : 0}%</span>
-            </div>
-            <PerformanceBars values={metrics.loadBars} />
-          </div>
-        </SectionPanel>
-      </div>
     </div>
   )
 }

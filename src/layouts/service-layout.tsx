@@ -4,6 +4,7 @@ import type { FormEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AI_ASSISTANT_OPEN_EVENT, AiAssistantWidget } from '../components/ai-assistant-widget'
 import { ScrollToTop } from '../components/scroll-to-top'
+import { SecurityComponentSidebar } from '../components/security-component-sidebar'
 import { canManageCatalogResources } from '../lib/admin-role'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
 import { buildGlobalSearchPath, readGlobalSearchKeyword } from '../lib/global-search'
@@ -21,22 +22,23 @@ const themeModeToneClasses: Record<ThemeMode, string> = {
   dark: 'bg-[linear-gradient(135deg,#1f2937,#64748b)]',
 }
 
-const securityPrimaryPrefixes: Record<string, string> = {
-  '/security-governance/ingest/sources': '/security-governance/ingest',
-  '/security-governance/tags/catalog': '/security-governance/tags',
-  '/security-governance/access/policies': '/security-governance/access',
-  '/security-governance/access/publish': '/security-governance/access',
-  '/security-governance/risks/events': '/security-governance/risks',
-  '/security-governance/homomorphic/tasks': '/security-governance/homomorphic',
-}
+const componentConfigPrefixes = [
+  '/security-governance/ingest',
+  '/security-governance/access',
+  '/security-governance/homomorphic',
+  '/security-governance/tags',
+]
 
 function isPrimaryNavigationActive(pathname: string, target: string, isActive: boolean) {
   if (target === '/security-governance/dashboard') return pathname === target
   if (target === '/security-governance/resources/catalog') {
     return pathname === target || /^\/security-governance\/resources\/(?!apis(?:\/|$))/.test(pathname)
   }
-  const prefix = securityPrimaryPrefixes[target]
-  return isActive || Boolean(prefix && pathname.startsWith(prefix))
+  if (target === '/security-governance/risks/events') return pathname.startsWith('/security-governance/risks')
+  if (target === '/security-governance/components') {
+    return pathname === target || componentConfigPrefixes.some((prefix) => pathname.startsWith(prefix))
+  }
+  return isActive
 }
 
 export function ServiceLayout() {
@@ -59,6 +61,7 @@ export function ServiceLayout() {
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false)
   const isEmbedMode = readEmbedMode(location.search)
   const canOpenAdminApps = canManageCatalogResources(session?.user.roles)
+  const showComponentSidebar = componentConfigPrefixes.some((prefix) => location.pathname.startsWith(prefix))
 
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = themeMode
@@ -245,7 +248,16 @@ export function ServiceLayout() {
             : 'pr-4 translate-x-0',
         )}
       >
-        <Outlet />
+        {showComponentSidebar ? (
+          <div className="grid min-w-0 gap-5 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
+            <SecurityComponentSidebar />
+            <div className="min-w-0">
+              <Outlet />
+            </div>
+          </div>
+        ) : (
+          <Outlet />
+        )}
       </main>
 
       {!isEmbedMode && location.pathname !== '/login' && PORTAL_AI_ASSISTANT_ENABLED ? <AiAssistantWidget /> : null}

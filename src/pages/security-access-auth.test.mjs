@@ -7,7 +7,7 @@ const pageSource = readFileSync(resolve(process.cwd(), 'src/pages/security-v3-pa
 const runtimeSource = readFileSync(resolve(process.cwd(), 'security-runtime-service/app/runtime.py'), 'utf8')
 const migrationSource = readFileSync(resolve(process.cwd(), 'scripts/migrate-nocobase-v3.mjs'), 'utf8')
 
-test('访问主体配置 API Key 安全引用和授权 API 清单', () => {
+test('数据应用配置 API Key 安全引用和授权 API 清单', () => {
   assert.match(pageSource, /label: 'API Key 安全引用'/)
   assert.match(pageSource, /name: 'allowed_api_codes_json'/)
   assert.match(migrationSource, /field\.json\('allowed_api_codes_json'/)

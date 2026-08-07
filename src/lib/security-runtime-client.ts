@@ -38,8 +38,19 @@ export type ResourceLatestRows = {
   rejectedCount: number
   samplingEnabled: boolean
   samplingRate: number
+  configSource: 'source' | 'resource'
+  inheritSourceRules: boolean
   integrityEnabled: boolean
+  integrityExecutable: boolean
+  integrityMode: 'inherit' | 'disabled' | 'digest_field'
+  integrityConfigSource: 'source' | 'resource'
   checksumAlgorithm: string
+  digestField: string
+  checksumFields: string[]
+  integrityFailureAction: 'reject' | 'warn'
+  integrityCheckedCount: number
+  integrityPassedCount: number
+  integrityFailedCount: number
   validationRule: {
     requiredFields: string[]
     numericRanges: Record<string, unknown>
@@ -47,7 +58,7 @@ export type ResourceLatestRows = {
   }
   columns: Array<{ code: string; name: string; dataType: string }>
   rows: Array<Record<string, unknown>>
-  validationResults: Array<{ passed: boolean; issues: string[] }>
+  validationResults: Array<{ passed: boolean; issues: string[]; warnings?: string[]; integrityPassed?: boolean }>
 }
 
 export type BehaviorBaselineInput = {

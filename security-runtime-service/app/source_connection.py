@@ -6,6 +6,38 @@ import psycopg
 import pymysql
 
 
+CHANNEL_SOURCE_TYPES = {"file_e", "message_queue"}
+
+
+def check_channel_connection(source: dict[str, Any], timeout_seconds: int) -> None:
+    """E 文件 / 消息通道接入检查（演示环境语义）。
+
+    演示环境中文件与消息通道不真实拨号，只校验接入元数据是否完整：
+    - file_e：必须配置文件来源标识（file_pattern / filePattern，或 database_name 兜底）
+    - message_queue：必须配置主题标识（topic / topic_name，或 database_name 兜底）
+    """
+    source_type = str(source.get("source_type") or "").strip()
+    options = source.get("connection_options_json") or {}
+    if not isinstance(options, dict):
+        options = {}
+    fallback = str(source.get("database_name") or "").strip()
+    if source_type == "file_e":
+        identifier = str(
+            options.get("file_pattern") or options.get("filePattern") or fallback
+        ).strip()
+        if not identifier:
+            raise ValueError("E 文件通道未配置文件来源标识")
+        return
+    if source_type == "message_queue":
+        identifier = str(
+            options.get("topic") or options.get("topic_name") or fallback
+        ).strip()
+        if not identifier:
+            raise ValueError("消息通道未配置主题标识")
+        return
+    raise ValueError(f"不支持的接入通道类型：{source_type}")
+
+
 def _dialect(source: dict[str, Any]) -> str:
     options = source.get("connection_options_json") or {}
     if not isinstance(options, dict):

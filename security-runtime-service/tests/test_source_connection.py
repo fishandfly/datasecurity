@@ -1,6 +1,31 @@
 from unittest.mock import MagicMock, patch
 
-from app.source_connection import check_database_connection
+import pytest
+
+from app.source_connection import check_channel_connection, check_database_connection
+
+
+def test_file_e_channel_requires_file_source_identifier():
+    check_channel_connection(
+        {"source_type": "file_e", "connection_options_json": {"file_pattern": "EMS_ELEC_ANALOG_*.e"}},
+        5,
+    )
+    with pytest.raises(ValueError, match="文件来源标识"):
+        check_channel_connection({"source_type": "file_e", "connection_options_json": {}}, 5)
+
+
+def test_message_queue_channel_requires_topic_identifier():
+    check_channel_connection(
+        {"source_type": "message_queue", "connection_options_json": {"topic": "psr-measurement"}},
+        5,
+    )
+    with pytest.raises(ValueError, match="主题标识"):
+        check_channel_connection({"source_type": "message_queue", "connection_options_json": {}}, 5)
+
+
+def test_unknown_channel_source_type_is_rejected():
+    with pytest.raises(ValueError, match="不支持的接入通道类型"):
+        check_channel_connection({"source_type": "ftp", "connection_options_json": {}}, 5)
 
 
 def test_mysql_source_uses_mysql_driver_and_select_one():

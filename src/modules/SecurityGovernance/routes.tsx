@@ -2,6 +2,7 @@ import { lazy } from 'react'
 import { Navigate, Route } from 'react-router-dom'
 
 const SecurityDashboardPage = lazy(async () => ({ default: (await import('../../pages/security-dashboard-page')).SecurityDashboardPage }))
+const SecurityRealtimeMonitorPage = lazy(async () => ({ default: (await import('../../pages/security-realtime-monitor-page')).SecurityRealtimeMonitorPage }))
 const SecurityDataLabelsPage = lazy(async () => ({ default: (await import('../../pages/security-data-labels-page')).SecurityDataLabelsPage }))
 const SecuritySourceConfigPage = lazy(async () => ({ default: (await import('../../pages/security-source-config-page')).SecuritySourceConfigPage }))
 const SecurityAccessRuleConfigPage = lazy(async () => ({ default: (await import('../../pages/security-access-rule-config-page')).SecurityAccessRuleConfigPage }))
@@ -18,6 +19,7 @@ const SecurityBehaviorBaselinesPage = lazy(async () => ({ default: (await import
 const SecurityPolicyPublishPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityPolicyPublishPage }))
 const SecurityDecisionAuditPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityDecisionAuditPage }))
 const SecurityRiskEventsPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityRiskEventsPage }))
+const SecurityEngineLogCenterPage = lazy(async () => ({ default: (await import('../../pages/security-engine-log-center-page')).SecurityEngineLogCenterPage }))
 const SecurityCryptoKeysPage = lazy(async () => ({ default: (await import('../../pages/security-v3-pages')).SecurityCryptoKeysPage }))
 
 export function SecurityGovernanceRoutes() {
@@ -25,6 +27,8 @@ export function SecurityGovernanceRoutes() {
     <>
       <Route path="/security-governance" element={<Navigate to="/security-governance/dashboard" replace />} />
       <Route path="/security-governance/dashboard" element={<SecurityDashboardPage />} />
+      <Route path="/security-governance/realtime-monitor" element={<SecurityRealtimeMonitorPage />} />
+      <Route path="/security-governance/components" element={<Navigate to="/security-governance/ingest/sources" replace />} />
 
       <Route path="/security-governance/resources" element={<Navigate to="/security-governance/resources/catalog" replace />} />
       <Route path="/security-governance/resources/catalog" element={<SecurityGovernancePage />} />
@@ -54,6 +58,7 @@ export function SecurityGovernanceRoutes() {
 
       <Route path="/security-governance/risks" element={<Navigate to="/security-governance/risks/events" replace />} />
       <Route path="/security-governance/risks/events" element={<SecurityRiskEventsPage />} />
+      <Route path="/security-governance/risks/log-center" element={<SecurityEngineLogCenterPage />} />
 
       <Route path="/security-governance/homomorphic" element={<Navigate to="/security-governance/homomorphic/tasks" replace />} />
       <Route path="/security-governance/homomorphic/keys" element={<SecurityCryptoKeysPage />} />

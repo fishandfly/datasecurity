@@ -74,9 +74,14 @@ export function ResourceIngestSamplesPanel({ data, isLoading, error, onRefresh }
               <ShieldCheck className="h-4 w-4 text-[var(--primary)]" />
               {validationRuleCount} 项字段规则
             </div>
-            <div className="mt-1 text-[0.75rem] text-[var(--text-secondary)]">
-              {data.integrityEnabled ? `${data.checksumAlgorithm || '已配置'} 完整性校验` : '未启用完整性校验'}
+            <div className="mt-1 text-[0.75rem] leading-5 text-[var(--text-secondary)]">
+              {data.integrityExecutable
+                ? `${data.checksumAlgorithm} 已校验 ${data.integrityCheckedCount} 条，失败 ${data.integrityFailedCount} 条`
+                : data.integrityEnabled
+                  ? `${data.checksumAlgorithm || '摘要'} 已配置，尚未配置可执行的摘要字段`
+                  : '未启用完整性校验'}
             </div>
+            <div className="mt-1 text-[0.6875rem] text-[var(--text-muted)]">{data.configSource === 'resource' ? '资源级规则已生效' : '使用数据源默认规则'}</div>
           </div>
         </div>
       ) : null}
@@ -119,9 +124,12 @@ export function ResourceIngestSamplesPanel({ data, isLoading, error, onRefresh }
                     <td className="sticky left-0 border-b border-r border-[var(--surface-outline)] bg-inherit px-4 py-3 text-[0.75rem] font-medium text-[var(--text-muted)]">{rowIndex + 1}</td>
                     <td className="border-b border-r border-[var(--surface-outline)] px-4 py-3 align-top">
                       {data.validationResults[rowIndex]?.passed ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--status-success-text)]">
-                          <CheckCircle2 className="h-3.5 w-3.5" />通过
-                        </span>
+                        <div className="space-y-1.5">
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--status-success-text)]">
+                            <CheckCircle2 className="h-3.5 w-3.5" />通过
+                          </span>
+                          {data.validationResults[rowIndex]?.warnings?.length ? <div className="text-[0.75rem] leading-5 text-[var(--status-warning-text)]">{data.validationResults[rowIndex]?.warnings?.join('；')}</div> : null}
+                        </div>
                       ) : (
                         <div className="space-y-1.5">
                           <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--status-danger-text)]">
@@ -150,7 +158,7 @@ export function ResourceIngestSamplesPanel({ data, isLoading, error, onRefresh }
       ) : (
         <div className="rounded-[14px] border border-dashed border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-12 text-center text-[0.875rem] text-[var(--text-muted)]">
           {data && !data.samplingEnabled
-            ? '当前数据源的接入规则未启用数据抽样，请先在“接入校验 → 数据源配置 → 高级设置”中启用。'
+            ? '当前生效的接入规则未启用数据抽样，可在本页“配置资源校验”中覆盖数据源默认设置。'
             : '当前校验窗口没有可展示的接入抽样数据。'}
         </div>
       )}

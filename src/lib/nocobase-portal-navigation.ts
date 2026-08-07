@@ -14,6 +14,7 @@ import {
   MapPinned,
   ScrollText,
   Search,
+  Settings2,
   Shield,
   Tags,
   UserRound,
@@ -90,6 +91,7 @@ const iconMap: Record<string, LucideIcon> = {
   MapPinned,
   ScrollText,
   Search,
+  Settings2,
   Shield,
   Tags,
   UserRound,
@@ -98,12 +100,9 @@ const iconMap: Record<string, LucideIcon> = {
 
 const DEFAULT_PRIMARY_NAVIGATIONS: PortalPrimaryNavigationItem[] = [
   { key: 'nav_security_dashboard', title: '安全态势', target: '/security-governance/dashboard', icon: Activity },
-  { key: 'nav_security_ingest', title: '接入校验', target: '/security-governance/ingest/sources', icon: DatabaseZap },
   { key: 'nav_security_resources', title: '数据资源', target: '/security-governance/resources/catalog', icon: Database },
-  { key: 'nav_security_tags', title: '标签管理', target: '/security-governance/tags/catalog', icon: Tags },
-  { key: 'nav_security_access', title: '访问策略', target: '/security-governance/access/publish', icon: Shield },
   { key: 'nav_security_risks', title: '风险事件', target: '/security-governance/risks/events', icon: AlertTriangle },
-  { key: 'nav_security_homomorphic', title: '同态加密', target: '/security-governance/homomorphic/tasks', icon: LockKeyhole },
+  { key: 'nav_security_components', title: '组件配置', target: '/security-governance/components', icon: Settings2 },
 ]
 
 const EXCLUDED_PRIMARY_NAV_TARGETS = new Set([

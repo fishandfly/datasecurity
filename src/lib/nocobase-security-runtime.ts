@@ -81,6 +81,14 @@ export type SecurityDataSourceType =
   | 'substation_monitor'
   | 'distribution_automation'
   | 'wide_area_measurement'
+  | 'file_e'
+  | 'message_queue'
+  | 'ems'
+  | 'tmr'
+  | 'distribution_cloud'
+  | 'cable_monitor'
+  | 'weather'
+  | 'hvcable'
   | 'realtime_db'
   | 'history_db'
   | 'third_party_api'
@@ -292,6 +300,14 @@ const FALLBACK_LABELS: Record<string, string> = {
   substation_monitor: '变电站集中监控',
   distribution_automation: '配电自动化',
   wide_area_measurement: '广域测量',
+  file_e: 'E 文件通道',
+  message_queue: '消息服务通道',
+  ems: '调度自动化',
+  tmr: '电能量计量',
+  distribution_cloud: '配电云主站',
+  cable_monitor: '输变电状态监测',
+  weather: '网格化气象',
+  hvcable: '高压电缆在线监测',
   realtime_db: '实时库',
   history_db: '历史库',
   third_party_api: '第三方接口',

@@ -38,9 +38,9 @@ services:
       RUNTIME_ENFORCE_SOURCE_IP: ${RUNTIME_ENFORCE_SOURCE_IP:-false}
       RUNTIME_TRUST_PROXY_HEADERS: "true"
       SUBJECT_SECRETS_JSON: >-
-        {"secret://subjects/internal-a":"${SUBJECT_INTERNAL_A_SECRET:?请配置内部主体A凭据}","secret://subjects/internal-b":"${SUBJECT_INTERNAL_B_SECRET:?请配置内部主体B凭据}","secret://subjects/external-c":"${SUBJECT_EXTERNAL_C_SECRET:?请配置外部主体凭据}"}
+        {"secret://subjects/internal-a":"${SUBJECT_INTERNAL_A_SECRET:?请配置内部主体A凭据}","secret://subjects/internal-b":"${SUBJECT_INTERNAL_B_SECRET:?请配置内部主体B凭据}","secret://subjects/external-c":"${SUBJECT_EXTERNAL_C_SECRET:?请配置外部主体凭据}","secret://subjects/online-grid":"${SUBJECT_DEMO_SECRET:?请配置客户应用演示主体凭据}","secret://subjects/marketing-2":"${SUBJECT_DEMO_SECRET}","secret://subjects/line-loss":"${SUBJECT_DEMO_SECRET}","secret://subjects/line-relation":"${SUBJECT_DEMO_SECRET}","secret://subjects/sales-forecast":"${SUBJECT_DEMO_SECRET}","secret://subjects/credit-electric":"${SUBJECT_DEMO_SECRET}","secret://subjects/data-govern":"${SUBJECT_DEMO_SECRET}","secret://subjects/external-env":"${SUBJECT_DEMO_SECRET}","secret://subjects/data-transfer":"${SUBJECT_DEMO_SECRET}","secret://subjects/full-link-monitor":"${SUBJECT_DEMO_SECRET}","secret://subjects/smart-city":"${SUBJECT_DEMO_SECRET}","secret://subjects/multi-source":"${SUBJECT_DEMO_SECRET}","secret://subjects/digital-substation":"${SUBJECT_DEMO_SECRET}","secret://subjects/charging":"${SUBJECT_DEMO_SECRET}","secret://subjects/new-energy":"${SUBJECT_DEMO_SECRET}","secret://subjects/audit":"${SUBJECT_DEMO_SECRET}","secret://subjects/discipline":"${SUBJECT_DEMO_SECRET}","secret://subjects/intelligent-dispatch":"${SUBJECT_DEMO_SECRET}"}
       SOURCE_SECRETS_JSON: >-
-        {"secret://security/source/src-yc20-001":"${POSTGRES_PASSWORD:?请配置数据源凭据}","secret://security/source/mysql-validation":"${MYSQL_VALIDATION_PASSWORD:-}"}
+        {"secret://security/source/src-yc20-001":"${POSTGRES_PASSWORD:?请配置数据源凭据}","secret://security/source/src-ems-001":"${POSTGRES_PASSWORD}","secret://security/source/src-tmr-001":"${POSTGRES_PASSWORD}","secret://security/source/src-distribution-001":"${POSTGRES_PASSWORD}","secret://security/source/src-cable-001":"${POSTGRES_PASSWORD}","secret://security/source/src-weather-001":"${POSTGRES_PASSWORD}","secret://security/source/src-hvcable-001":"${POSTGRES_PASSWORD}","secret://security/source/mysql-validation":"${MYSQL_VALIDATION_PASSWORD:-}"}
       TZ: Asia/Shanghai
     ports:
       - "127.0.0.1:8090:8090"
@@ -108,6 +108,7 @@ services:
       - ./storage/db/postgres:/var/lib/postgresql/data
       - ./postgres/init-measurement-data.sh:/docker-entrypoint-initdb.d/20-init-measurement-data.sh:ro
       - ./v3.0/initdb/02-init-measurement-demo.sql:/opt/measurement-demo.sql:ro
+      - ./v3.0/initdb/03-init-measurement-v31.sql:/opt/measurement-v31.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nocobase -d nocobase"]
       interval: 10s

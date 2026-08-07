@@ -57,12 +57,21 @@ const tagRulesConfig: SecurityV3CollectionPageConfig = {
   fields: [{ name: 'source_code', label: '数据源编码', readOnly: true }, { name: 'source_name', label: '数据源', readOnly: true }, { name: 'tag_rules_json', label: '标签规则', type: 'json', defaultValue: {} }, { name: 'source_tags', label: '数据源标签', type: 'json', defaultValue: [] }],
 }
 
+const ingestExecutionTypeLabels: Record<string, string> = {
+  connection_test: '连接检查',
+  validation: '数据校验',
+  validation_preview: '资源抽样校验',
+  resource_delivery_validation: '资源交付校验',
+  resource_delivery_error: '资源交付异常',
+  tagging: '标签执行',
+}
+
 const ingestLogsBase: Omit<SecurityV3CollectionPageConfig, 'title' | 'filter'> = {
   module: 'ingest', collection: 'security_ingest_logs', readOnly: true, appends: ['data_source', 'api_resource'],
-  columns: [{ key: 'batch_code', label: '批次编号' }, { key: 'execution_type', label: '执行类型' }, { key: 'data_source', label: '数据源' }, { key: 'started_at', label: '开始时间' }, { key: 'input_count', label: '输入数' }, { key: 'passed_count', label: '通过数' }, { key: 'rejected_count', label: '拒绝数' }, { key: 'result_status', label: '结果', tone: 'status' }],
+  columns: [{ key: 'batch_code', label: '批次编号' }, { key: 'execution_type', label: '执行类型', value: (record) => ingestExecutionTypeLabels[String(record.execution_type || '')] || record.execution_type }, { key: 'data_source', label: '数据源' }, { key: 'started_at', label: '开始时间' }, { key: 'input_count', label: '输入数' }, { key: 'passed_count', label: '通过数' }, { key: 'rejected_count', label: '拒绝数' }, { key: 'result_status', label: '结果', tone: 'status' }],
   fields: [
     { name: 'batch_code', label: '批次编号', readOnly: true },
-    { name: 'execution_type', label: '执行类型', type: 'select', readOnly: true, options: [{ value: 'connection_test', label: '连接检查' }, { value: 'validation', label: '数据校验' }, { value: 'tagging', label: '标签执行' }] },
+    { name: 'execution_type', label: '执行类型', type: 'select', readOnly: true, options: [{ value: 'connection_test', label: '连接检查' }, { value: 'validation', label: '数据校验' }, { value: 'resource_delivery_validation', label: '资源交付校验' }, { value: 'tagging', label: '标签执行' }] },
     { name: 'data_source_id', label: '数据源', readOnly: true, relation: { collection: 'security_data_sources', labelKey: 'source_name' } },
     { name: 'api_resource_id', label: 'API 资源', readOnly: true, relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
     { name: 'rule_version', label: '规则版本', type: 'number', readOnly: true },
@@ -72,14 +81,14 @@ const ingestLogsBase: Omit<SecurityV3CollectionPageConfig, 'title' | 'filter'> =
     { name: 'passed_count', label: '通过数', type: 'number', readOnly: true },
     { name: 'rejected_count', label: '拒绝数', type: 'number', readOnly: true },
     { name: 'duration_ms', label: '执行耗时（毫秒）', type: 'number', readOnly: true },
-    { name: 'result_status', label: '执行结果', type: 'select', readOnly: true, options: [{ value: 'success', label: '成功' }, { value: 'partial', label: '部分成功' }, { value: 'failed', label: '失败' }] },
+    { name: 'result_status', label: '执行结果', type: 'select', readOnly: true, options: [{ value: 'success', label: '成功' }, { value: 'warning', label: '告警放行' }, { value: 'partial', label: '部分成功' }, { value: 'failed', label: '失败' }] },
     { name: 'error_summary', label: '错误摘要', type: 'textarea', readOnly: true },
     { name: 'result_detail_json', label: '结果详情', type: 'json', readOnly: true, defaultValue: {} },
   ],
 }
 
 const subjectsConfig: SecurityV3CollectionPageConfig = {
-  module: 'access', title: '访问主体', collection: 'security_access_subjects',
+  module: 'access', title: '数据应用', collection: 'security_access_subjects',
   columns: [{ key: 'subject_code', label: '主体编码' }, { key: 'subject_name', label: '主体名称' }, { key: 'subject_type', label: '主体类型' }, { key: 'organization_name', label: '所属组织' }, { key: 'allowed_api_codes_json', label: '授权 API' }, { key: 'credential_version', label: 'API Key 版本' }, { key: 'subject_status', label: '状态', tone: 'status' }],
   fields: [
     { name: 'subject_code', label: '主体编码', required: true }, { name: 'subject_name', label: '主体名称', required: true },
@@ -94,14 +103,14 @@ const subjectsConfig: SecurityV3CollectionPageConfig = {
 
 const policiesConfig: SecurityV3CollectionPageConfig = {
   module: 'access', title: '访问策略', createLabel: '新增访问策略', collection: 'eco_resource_security_policies', filter: { policy_kind: 'access_policy' }, appends: ['subject', 'api_resource'],
-  columns: [{ key: 'policy_code', label: '策略编码' }, { key: 'policy_name', label: '策略名称' }, { key: 'access_scope', label: '作用范围', value: (record) => record.access_scope === 'label_group' ? '标签组合' : '单个资源' }, { key: 'security_tags', label: '资源标签条件' }, { key: 'subject', label: '访问主体' }, { key: 'api_resource', label: '例外 API' }, { key: 'output_mode', label: '输出模式' }, { key: 'risk_threshold', label: '风险阈值' }, { key: 'policy_version', label: '策略版本' }, { key: 'publish_status', label: '发布状态', tone: 'status' }, { key: 'published_at', label: '发布时间', value: (record) => formatLocalDateTime(record.published_at) }],
+  columns: [{ key: 'policy_code', label: '策略编码' }, { key: 'policy_name', label: '策略名称' }, { key: 'access_scope', label: '作用范围', value: (record) => record.access_scope === 'label_group' ? '标签组合' : '单个资源' }, { key: 'security_tags', label: '资源标签条件' }, { key: 'subject', label: '数据应用' }, { key: 'api_resource', label: '例外 API' }, { key: 'output_mode', label: '输出模式' }, { key: 'risk_threshold', label: '风险阈值' }, { key: 'policy_version', label: '策略版本' }, { key: 'publish_status', label: '发布状态', tone: 'status' }, { key: 'published_at', label: '发布时间', value: (record) => formatLocalDateTime(record.published_at) }],
   fields: [
     { name: 'policy_code', label: '策略编码', required: true }, { name: 'policy_name', label: '策略名称', required: true }, { name: 'policy_kind', label: '策略类型', type: 'select', options: [{ value: 'access_policy', label: '访问策略' }], defaultValue: 'access_policy' },
     { name: 'access_scope', label: '策略作用范围', type: 'select', required: true, defaultValue: 'label_group', options: [{ value: 'label_group', label: '按分类分级与标签组合' }, { value: 'resource', label: '单个数据资源例外' }] },
     { name: 'security_tags', label: '必须命中的资源标签（JSON 数组）', type: 'json', defaultValue: [] },
     { name: 'security_profile_json', label: '标签组合条件（match/priority/protectionLevels/fieldTags）', type: 'json', defaultValue: { match: 'all', priority: 100, protectionLevels: [], fieldTags: [] } },
     { name: 'resource_id', label: '例外数据资源（仅单资源策略填写）', relation: { collection: 'eco_data_resources', labelKey: 'resource_name' } },
-    { name: 'subject_id', label: '访问主体', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name' } },
+    { name: 'subject_id', label: '数据应用', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name' } },
     { name: 'api_resource_id', label: '例外 API（仅单资源策略填写）', relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
     { name: 'scenario', label: '使用场景', required: true }, { name: 'source_ips_json', label: '来源 IP 范围', type: 'json', defaultValue: [] }, { name: 'allowed_time_ranges_json', label: '允许时段', type: 'json', defaultValue: [] },
     { name: 'max_requests_per_minute', label: '每分钟请求上限', type: 'number', defaultValue: 60 }, { name: 'max_query_days', label: '最大查询天数', type: 'number', defaultValue: 1 }, { name: 'max_rows', label: '最大返回行数', type: 'number', defaultValue: 1000 },
@@ -127,9 +136,9 @@ const policiesConfig: SecurityV3CollectionPageConfig = {
 
 const baselinesConfig: SecurityV3CollectionPageConfig = {
   module: 'access', title: '行为基线', collection: 'security_behavior_baselines', appends: ['subject', 'api_resource'],
-  columns: [{ key: 'baseline_code', label: '基线编码' }, { key: 'subject', label: '访问主体' }, { key: 'api_resource', label: 'API 资源' }, { key: 'sample_count', label: '样本数' }, { key: 'frequency_avg', label: '平均频率' }, { key: 'query_days_avg', label: '平均查询天数' }, { key: 'rows_avg', label: '平均行数' }, { key: 'baseline_status', label: '状态', tone: 'status' }],
+  columns: [{ key: 'baseline_code', label: '基线编码' }, { key: 'subject', label: '数据应用' }, { key: 'api_resource', label: 'API 资源' }, { key: 'sample_count', label: '样本数' }, { key: 'frequency_avg', label: '平均频率' }, { key: 'query_days_avg', label: '平均查询天数' }, { key: 'rows_avg', label: '平均行数' }, { key: 'baseline_status', label: '状态', tone: 'status' }],
   fields: [
-    { name: 'baseline_code', label: '基线编码', required: true }, { name: 'subject_id', label: '访问主体', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name' } }, { name: 'api_resource_id', label: 'API 资源', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
+    { name: 'baseline_code', label: '基线编码', required: true }, { name: 'subject_id', label: '数据应用', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name' } }, { name: 'api_resource_id', label: 'API 资源', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
     { name: 'sample_from', label: '样本开始时间', type: 'datetime' }, { name: 'sample_to', label: '样本结束时间', type: 'datetime' }, { name: 'sample_count', label: '样本数', type: 'number', min: 0 },
     { name: 'frequency_avg', label: '平均频率', type: 'number', min: 0 }, { name: 'frequency_stddev', label: '频率标准差', type: 'number', min: 0 },
     { name: 'query_days_avg', label: '平均查询天数', type: 'number', min: 0 }, { name: 'query_days_stddev', label: '查询天数标准差', type: 'number', min: 0 },
@@ -141,7 +150,7 @@ const baselinesConfig: SecurityV3CollectionPageConfig = {
 
 const auditConfig: SecurityV3CollectionPageConfig = {
   module: 'access', title: '调用与决策日志', collection: 'security_policy_decision_logs', readOnly: true, appends: ['subject', 'api_resource', 'policy'],
-  columns: [{ key: 'request_id', label: '请求编号' }, { key: 'requested_at', label: '请求时间' }, { key: 'subject', label: '访问主体' }, { key: 'api_resource', label: 'API 资源' }, { key: 'decision_result', label: '决策', tone: 'status' }, { key: 'risk_level', label: '风险级别', tone: 'status' }, { key: 'returned_rows', label: '返回行数' }, { key: 'duration_ms', label: '耗时(ms)' }],
+  columns: [{ key: 'request_id', label: '请求编号' }, { key: 'requested_at', label: '请求时间' }, { key: 'subject', label: '数据应用' }, { key: 'api_resource', label: 'API 资源' }, { key: 'decision_result', label: '决策', tone: 'status' }, { key: 'risk_level', label: '风险级别', tone: 'status' }, { key: 'returned_rows', label: '返回行数' }, { key: 'duration_ms', label: '耗时(ms)' }],
 }
 
 const risksConfig: SecurityV3CollectionPageConfig = {
