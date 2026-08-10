@@ -66,7 +66,7 @@ postgres → app（NocoBase 安装和插件启用）→ init-data（bootstrap �
 postgres + app + init-data + openfhe → security-runtime → frontend
 ```
 
-`init-data` 使用 `docker/storage/init/.v31-seeded` 标记演示数据已写入，使用 `docker/storage/init/.v31-schema-v2` 标记当前 schema 已迁移；只有两个标记都存在时才跳过。旧数据卷缺少 schema 标记时进入 schema-only 模式，只执行幂等 schema/元数据迁移，不写入批量演示数据。只有在可丢弃的演示环境中才删除标记或设置 `FORCE_REINIT=true`。已有数据库不得重跑演示 seed，更不能删除 `docker/storage/db/postgres`；生产数据应通过审核后的管理操作或迁移包建立。
+`init-data` 使用 `docker/storage/init/.v31-seeded` 标记演示数据已写入，使用 `docker/storage/init/.v31-schema-v2` 标记当前 schema 已迁移；只有两个标记都存在时才跳过。旧数据卷缺少 schema 标记时进入 schema-only 模式，先补齐流式表审计列，再执行幂等 schema/元数据迁移，不写入批量演示数据。只有在可丢弃的演示环境中才删除标记或设置 `FORCE_REINIT=true`。已有数据库不得重跑演示 seed，更不能删除 `docker/storage/db/postgres`；生产数据应通过审核后的管理操作或迁移包建立。
 
 运行时职责和安全边界：
 

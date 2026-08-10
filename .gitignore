@@ -1,6 +1,6 @@
 /node_modules
 /dist
-/docs
+/docs-internal/
 /docker/storage/
 /docker/backups/
 /docker/.env

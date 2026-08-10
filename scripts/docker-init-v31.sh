@@ -29,12 +29,18 @@ npm ci --omit=dev --no-audit --no-fund
 echo "[init-data] 安装 pg 驱动（用于创建字典数据库视图）..."
 npm install --no-save --no-audit --no-fund pg
 
+echo "[init-data] 修复流式表审计列兼容性..."
+node scripts/repair-streaming-audit-columns.mjs
+
 if [ "$RUN_FULL_INIT" = "true" ]; then
   echo "[init-data] 执行 bootstrap-base-collections.mjs（全新库自举基础集合）..."
   node scripts/bootstrap-base-collections.mjs
 
   echo "[init-data] 执行 seed-nocobase-demo.mjs ..."
   node scripts/seed-nocobase-demo.mjs
+
+  echo "[init-data] 补齐 seed 创建的流式表审计列..."
+  node scripts/repair-streaming-audit-columns.mjs
 
   echo "[init-data] 创建字典数据库视图（04-init-dictionary-views.sql）..."
   node scripts/init-dictionary-views.mjs

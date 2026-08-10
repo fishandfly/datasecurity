@@ -76,7 +76,7 @@ docker compose --env-file docker/.env -f docker/docker-compose.yml config --quie
 docker compose --env-file docker/.env -f docker/docker-compose.yml up -d --build
 ```
 
-初始化标记为 `docker/storage/init/.v31-seeded`，当前 schema 迁移标记为 `docker/storage/init/.v31-schema-v2`。旧环境如果只有 `.v31-seeded`，下一次启动 `init-data` 会自动进入 schema-only 模式，补齐流式集合及字段，不执行批量演示数据写入。演示环境需要完整重跑时，可删除两个标记或设置 `FORCE_REINIT=true` 后重新启动；已有业务数据禁止执行演示 seed 或删除 PostgreSQL 数据卷。
+初始化标记为 `docker/storage/init/.v31-seeded`，当前 schema 迁移标记为 `docker/storage/init/.v31-schema-v2`。旧环境如果只有 `.v31-seeded`，下一次启动 `init-data` 会自动进入 schema-only 模式，先补齐流式表审计列、集合及字段，再执行迁移，不写入批量演示数据。演示环境需要完整重跑时，可删除两个标记或设置 `FORCE_REINIT=true` 后重新启动；已有业务数据禁止执行演示 seed 或删除 PostgreSQL 数据卷。
 
 ## 关键环境变量
 
