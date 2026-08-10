@@ -4,6 +4,7 @@ const baseURL = process.env.NOCOBASE_API_BASE_URL || 'http://localhost:8196/api/
 const account = process.env.NOCOBASE_ADMIN_ACCOUNT || 'nocobase'
 const password = process.env.NOCOBASE_ADMIN_PASSWORD || 'admin123'
 const authenticator = process.env.NOCOBASE_AUTHENTICATOR || 'basic'
+const schemaOnly = ['1', 'true', 'yes'].includes(String(process.env.MIGRATE_SCHEMA_ONLY || '').toLowerCase())
 const client = new APIClient({ baseURL, storageType: 'memory' })
 
 function rows(payload) {
@@ -841,13 +842,24 @@ async function seedData() {
 
 async function verify() {
   const names = [...Object.keys(existingCollections), ...newCollections.map((item) => item.name)]
+  const requiredFields = Object.fromEntries(newCollections.map((item) => [item.name, item.fields.map((definition) => definition.name)]))
   const counts = {}
   const missingMetadata = []
+  const missingRequiredFields = []
   for (const name of names) {
     counts[name] = (await listAll(name)).length
     const collection = await findOne('collections', { name })
-    if (!collection?.title || !collection?.description) missingMetadata.push(`${name}::<collection>`)
-    for (const item of await listAll('collections.fields', {}, name)) {
+    if (!collection) {
+      missingMetadata.push(`${name}::<collection>`)
+      continue
+    }
+    if (!collection.title || !collection.description) missingMetadata.push(`${name}::<collection>`)
+    const fields = await listAll('collections.fields', {}, name)
+    const fieldNames = new Set(fields.map((item) => item.name))
+    for (const fieldName of requiredFields[name] || []) {
+      if (!fieldNames.has(fieldName)) missingRequiredFields.push(`${name}.${fieldName}`)
+    }
+    for (const item of fields) {
       if (!item.uiSchema?.title || !item.description) missingMetadata.push(`${name}.${item.name}`)
     }
   }
@@ -923,10 +935,12 @@ async function verify() {
     unarchivedLegacyTasks,
     forbiddenTaskPayloads,
     missingMetadata,
+    missingRequiredFields,
     forbiddenFields,
     verifiedAt: new Date().toISOString(),
   }, null, 2))
   if (missingMetadata.length) throw new Error(`元数据审计未通过：${missingMetadata.join(', ')}`)
+  if (missingRequiredFields.length) throw new Error(`schema 字段缺失：${missingRequiredFields.join(', ')}`)
   if (forbiddenFields.length) throw new Error(`存在禁止的私钥字段：${forbiddenFields.join(', ')}`)
   if (missingDictionaryTypes.length || missingDictionaryItems.length) throw new Error('3.0 字典读回验证未通过')
   if (legacyCryptoAlgorithms.length) throw new Error(`存在超出 3.0 边界的密态算法字典：${legacyCryptoAlgorithms.join(', ')}`)
@@ -952,8 +966,12 @@ async function main() {
   await ensureDictionaryViews()
   console.log('[4/7] 初始化分类树与受控标签策略')
   await ensureClassificationsAndTagPolicies()
-  console.log('[5/7] 初始化 API、主体、策略、基线和密钥元数据')
-  await seedData()
+  if (schemaOnly) {
+    console.log('[5/7] schema-only 模式：跳过演示数据写入')
+  } else {
+    console.log('[5/7] 初始化 API、主体、策略、基线和密钥元数据')
+    await seedData()
+  }
   console.log('[6/7] 重新执行字段元数据审计')
   await ensureSchema()
   console.log('[7/7] 后台读回验证')
