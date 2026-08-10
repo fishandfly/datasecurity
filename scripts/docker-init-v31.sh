@@ -12,12 +12,14 @@ if [ "$FORCE" = "true" ] || [ "$FORCE" = "1" ] || [ "$FORCE" = "yes" ]; then
   SCHEMA_ONLY=false
 elif [ -f "$MARKER" ]; then
   if [ -f "$SCHEMA_MARKER" ]; then
-    echo "[init-data] 已存在初始化与 schema 标记，跳过初始化"
-    exit 0
+    echo "[init-data] 已存在初始化与 schema 标记，执行无损 schema 和审计列修复"
+    RUN_FULL_INIT=false
+    SCHEMA_ONLY=true
+  else
+    echo "[init-data] 检测到旧版初始化标记但缺少 ${SCHEMA_MARKER}，只执行 schema-only 迁移"
+    RUN_FULL_INIT=false
+    SCHEMA_ONLY=true
   fi
-  echo "[init-data] 检测到旧版初始化标记但缺少 ${SCHEMA_MARKER}，只执行 schema-only 迁移"
-  RUN_FULL_INIT=false
-  SCHEMA_ONLY=true
 else
   RUN_FULL_INIT=true
   SCHEMA_ONLY=false
@@ -29,7 +31,10 @@ npm ci --omit=dev --no-audit --no-fund
 echo "[init-data] 安装 pg 驱动（用于创建字典数据库视图）..."
 npm install --no-save --no-audit --no-fund pg
 
-echo "[init-data] 修复流式表审计列兼容性..."
+echo "[init-data] 修复供需集合审计字段配置..."
+node scripts/repair-supply-demand-audit.mjs
+
+echo "[init-data] 修复流式和供需表审计列兼容性..."
 node scripts/repair-streaming-audit-columns.mjs
 
 if [ "$RUN_FULL_INIT" = "true" ]; then

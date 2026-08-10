@@ -84,6 +84,18 @@ type NocoDataWrapper<T> = {
   data?: T
 }
 
+let favoritesEndpointAvailable: boolean | null = null
+
+function getErrorStatus(error: unknown) {
+  if (!error || typeof error !== 'object' || !('response' in error)) return null
+
+  const response = error.response
+  if (!response || typeof response !== 'object' || !('status' in response)) return null
+
+  const status = Number(response.status)
+  return Number.isFinite(status) ? status : null
+}
+
 function normalizeString(value: unknown) {
   if (typeof value !== 'string') return ''
   return value.trim()
@@ -201,18 +213,24 @@ export function buildFavoriteResourceSummaries(
 }
 
 export async function fetchFavoriteListMine() {
-  if (!nocobaseClient.auth.token) {
+  if (!nocobaseClient.auth.token || favoritesEndpointAvailable === false) {
     return [] as FavoriteItem[]
   }
 
   try {
     const response = await nocobaseClient.resource(FAVORITES_RESOURCE_NAME).listMine()
     const payload = extractNocoDataPayload<FavoriteListMinePayload>(response.data)
+    favoritesEndpointAvailable = true
 
     return (payload?.items ?? [])
       .map((item) => normalizeFavoriteItem(item))
       .filter((item): item is FavoriteItem => Boolean(item))
   } catch (error) {
+    // Favorites is an optional backend extension. Older deployments do not expose it.
+    if (getErrorStatus(error) === 404) {
+      favoritesEndpointAvailable = false
+      return [] as FavoriteItem[]
+    }
     throw new Error(toErrorMessage(error, '我的收藏加载失败'))
   }
 }
@@ -221,12 +239,17 @@ export async function fetchFavoriteStatus(identity: FavoriteIdentity) {
   try {
     const response = await nocobaseClient.resource(FAVORITES_RESOURCE_NAME).status({ values: identity })
     const payload = extractNocoDataPayload<FavoriteStatusPayload>(response.data)
+    favoritesEndpointAvailable = true
 
     return {
       isFavorited: Boolean(payload?.isFavorited),
       item: normalizeFavoriteItem(payload?.item) ?? null,
     } satisfies FavoriteStatusResult
   } catch (error) {
+    if (getErrorStatus(error) === 404) {
+      favoritesEndpointAvailable = false
+      return { isFavorited: false, item: null } satisfies FavoriteStatusResult
+    }
     throw new Error(toErrorMessage(error, '收藏状态加载失败'))
   }
 }
@@ -250,12 +273,17 @@ export async function removeFavorite(identity: FavoriteIdentity) {
   try {
     const response = await nocobaseClient.resource(FAVORITES_RESOURCE_NAME).destroy({ values: identity })
     const payload = extractNocoDataPayload<FavoriteStatusPayload>(response.data)
+    favoritesEndpointAvailable = true
 
     return {
       isFavorited: Boolean(payload?.isFavorited),
       item: normalizeFavoriteItem(payload?.item) ?? null,
     } satisfies FavoriteStatusResult
   } catch (error) {
+    if (getErrorStatus(error) === 404) {
+      favoritesEndpointAvailable = false
+      return { isFavorited: false, item: null } satisfies FavoriteStatusResult
+    }
     throw new Error(toErrorMessage(error, '取消收藏失败'))
   }
 }
@@ -264,6 +292,7 @@ export async function resolveFavorite(identity: FavoriteIdentity) {
   try {
     const response = await nocobaseClient.resource(FAVORITES_RESOURCE_NAME).resolve({ values: identity })
     const payload = extractNocoDataPayload<FavoriteResolvePayload>(response.data)
+    favoritesEndpointAvailable = true
 
     return {
       status: normalizeString(payload?.status) || 'route_resolve_failed',
@@ -272,6 +301,10 @@ export async function resolveFavorite(identity: FavoriteIdentity) {
       openMode: normalizeString(payload?.openMode),
     } satisfies FavoriteResolveResult
   } catch (error) {
+    if (getErrorStatus(error) === 404) {
+      favoritesEndpointAvailable = false
+      return { status: 'route_resolve_failed', message: '当前环境未启用收藏服务', url: '', openMode: '' } satisfies FavoriteResolveResult
+    }
     throw new Error(toErrorMessage(error, '收藏跳转地址解析失败'))
   }
 }

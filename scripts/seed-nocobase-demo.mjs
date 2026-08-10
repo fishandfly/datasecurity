@@ -56,7 +56,14 @@ async function createIfMissing(collection, filter, values) {
 
 async function ensureCollection(name, title, description, titleField = 'name') {
   const existing = await findOne('collections', { name })
-  if (existing) return
+  const auditOptions = { createdAt: true, createdBy: true, updatedAt: true, updatedBy: true }
+  if (existing) {
+    await client.resource('collections').update({
+      filterByTk: name,
+      values: { title, description, titleField, ...auditOptions },
+    })
+    return
+  }
   await client.resource('collections').create({
     values: {
       name,
@@ -65,6 +72,7 @@ async function ensureCollection(name, title, description, titleField = 'name') {
       template: 'general',
       autoGenId: true,
       titleField,
+      ...auditOptions,
     },
   })
 }

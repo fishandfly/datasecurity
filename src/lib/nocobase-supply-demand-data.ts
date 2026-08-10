@@ -31,6 +31,7 @@ const SUMMARY_CACHE_TTL_MINUTES = 180
 type SupplyDemandFetchMode = 'light' | 'full' | 'applications'
 type SupplyDemandRelatedAppAssociationName = typeof SUPPLY_DEMAND_RELATED_APP_ASSOCIATION_CANDIDATES[number]
 type SupplyDemandAssociationName = 'linked_data_resources' | SupplyDemandRelatedAppAssociationName
+type SupplyDemandAppends = readonly string[]
 
 export type SupplyDemandPortalPageResult = {
   items: SupplyDemandInfo[]
@@ -493,6 +494,67 @@ function getSupplyDemandAppends(mode: SupplyDemandFetchMode) {
       : SUPPLY_DEMAND_LIGHT_APPENDS
 }
 
+function getSupplyDemandAppendCandidates(mode: SupplyDemandFetchMode): SupplyDemandAppends[] {
+  const candidates: SupplyDemandAppends[] = [getSupplyDemandAppends(mode)]
+
+  if (mode === 'applications') {
+    candidates.push(SUPPLY_DEMAND_FULL_APPENDS)
+  }
+
+  if (mode !== 'light') {
+    candidates.push(SUPPLY_DEMAND_LIGHT_APPENDS)
+  }
+
+  candidates.push([])
+  return candidates.filter((candidate, index) =>
+    candidates.findIndex((other) => other.join('|') === candidate.join('|')) === index,
+  )
+}
+
+function getSupplyDemandSortCandidates(sort: string) {
+  return sort === '-updatedAt' || sort === '-createdAt'
+    ? [sort, '-id']
+    : [sort]
+}
+
+function getErrorStatus(error: unknown) {
+  if (!error || typeof error !== 'object' || !('response' in error)) return null
+
+  const response = error.response
+  if (!response || typeof response !== 'object' || !('status' in response)) return null
+
+  const status = Number(response.status)
+  return Number.isFinite(status) ? status : null
+}
+
+async function listSupplyDemandCollection<T>(
+  collectionName: string,
+  mode: SupplyDemandFetchMode,
+  options: { page: number; pageSize: number; sort: string; filter?: Record<string, unknown> | null },
+) {
+  let lastError: unknown = null
+
+  for (const sort of getSupplyDemandSortCandidates(options.sort)) {
+    for (const appends of getSupplyDemandAppendCandidates(mode)) {
+      try {
+        const response = await nocobaseClient.resource(collectionName).list({
+          ...options,
+          sort,
+          filter: options.filter ?? undefined,
+          appends: [...appends],
+        })
+        return response.data as RawListResponse<T>
+      } catch (error) {
+        lastError = error
+        // Older deployed schemas may lack audit columns or an appended relation.
+        if (getErrorStatus(error) !== 400) throw error
+      }
+    }
+  }
+
+  throw lastError
+}
+
 function resolveSupplyDemandCollectionName(availableCollections?: Set<string> | null) {
   const resolvedCollections = availableCollections ?? null
   const supplyDemandCollection = resolveExistingCollection(
@@ -546,15 +608,11 @@ async function fetchSupplyDemandPortalCollectionPageInternal(
   const sort = params.sort ?? '-updatedAt'
 
   try {
-    const response = await nocobaseClient.resource(supplyDemandCollection).list({
-      page,
-      pageSize,
-      sort,
-      filter: params.filter ?? undefined,
-      appends: [...getSupplyDemandAppends(resolveSupplyDemandFetchMode(includeLinkedResources, includeRelatedApps))],
-    })
-
-    const payload = response.data as RawListResponse<RawSupplyDemandInfoRecord>
+    const payload = await listSupplyDemandCollection<RawSupplyDemandInfoRecord>(
+      supplyDemandCollection,
+      resolveSupplyDemandFetchMode(includeLinkedResources, includeRelatedApps),
+      { page, pageSize, sort, filter: params.filter ?? undefined },
+    )
     const normalizedMeta = normalizePagedMeta(payload.meta, page, pageSize)
 
     return {
@@ -572,13 +630,11 @@ async function fetchSupplyDemandPortalSummaryDataInternal() {
 
   try {
     const rows = await loadAllPagesParallel(async ({ page, pageSize }) => {
-      const response = await nocobaseClient.resource(supplyDemandCollection).list({
+      return listSupplyDemandCollection<RawSupplyDemandInfoRecord>(supplyDemandCollection, 'applications', {
         page,
         pageSize,
         sort: '-updatedAt',
-        appends: [...getSupplyDemandAppends('applications')],
       })
-      return response.data as RawListResponse<RawSupplyDemandInfoRecord>
     }, 200)
 
     return rows.map((item) => mapSupplyDemandInfo(item))
@@ -761,13 +817,11 @@ async function fetchSupplyDemandPortalDataInternal(mode: SupplyDemandFetchMode) 
     const availableCollections = await getAvailableCollectionNames()
     const supplyDemandCollection = resolveSupplyDemandCollectionName(availableCollections)
     const rows = await loadAllPagesParallel(async ({ page, pageSize }) => {
-      const response = await nocobaseClient.resource(supplyDemandCollection).list({
+      return listSupplyDemandCollection<RawSupplyDemandInfoRecord>(supplyDemandCollection, mode, {
         page,
         pageSize,
         sort: '-updatedAt',
-        appends: [...getSupplyDemandAppends(mode)],
       })
-      return response.data as RawListResponse<RawSupplyDemandInfoRecord>
     }, 200)
 
     const mapped = rows.map((item) => mapSupplyDemandInfo(item))
