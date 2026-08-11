@@ -43,8 +43,9 @@ test('资源详情聚合字段、应用、策略、同态任务和访问日志',
   assert.match(detailPageSource, /\['accessSubjects', '数据应用'\]/)
   assert.match(detailPageSource, /\['accessPolicies', '访问策略'\]/)
   assert.match(detailPageSource, /\['homomorphic', '同态加密'\]/)
-  assert.match(detailPageSource, /完整版访问日志/)
-  assert.match(detailPageSource, /未命中策略默认拒绝/)
+  assert.match(detailPageSource, /\['lineage', '流转关系'\]/)
+  assert.match(detailPageSource, /<ResourceSecuritySankey resourceId=\{String\(item\.id\)\} \/>/)
+  assert.doesNotMatch(detailPageSource, /\['status', '安全状态'\]/)
   assert.match(detailPageSource, /ensureDefaultSecurityApi\(item\.id\)/)
 })
 

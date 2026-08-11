@@ -696,6 +696,67 @@ export function buildRealtimeMonitorGraphs(input: RealtimeMonitorInput): Realtim
   }
 }
 
+function recordMatches(record: Record<string, unknown>, values: Set<string>, keys: string[]) {
+  return keys.some((key) => {
+    const value = text(record[key])
+    return value.length > 0 && values.has(value)
+  })
+}
+
+export function buildResourceRealtimeMonitorData(
+  data: RealtimeMonitorData,
+  resourceId: string,
+  windowHours = 24,
+): RealtimeMonitorData {
+  const targetResourceId = text(resourceId)
+  const resources = data.collections.resources.filter((resource) => text(resource.id) === targetResourceId)
+  const resourceIds = new Set(resources.map((resource) => text(resource.id)).filter(Boolean))
+  const apis = data.collections.apis.filter((api) => resourceIds.has(text(api.resource_id)))
+  const apiIds = new Set(apis.map((api) => text(api.id)).filter(Boolean))
+  const policies = data.collections.policies.filter((policy) =>
+    resourceIds.has(text(policy.resource_id)) || apiIds.has(text(policy.api_resource_id)),
+  )
+  const policyIds = new Set(policies.map((policy) => text(policy.id)).filter(Boolean))
+  const sourceIds = new Set(resources.map((resource) => text(resource.data_source_id)).filter(Boolean))
+  const decisionLogs = data.collections.decisionLogs.filter((log) =>
+    resourceIds.has(text(log.resource_id))
+    || apiIds.has(text(log.api_resource_id))
+    || policyIds.has(text(log.policy_id)),
+  )
+  const subjectIds = new Set([
+    ...policies.map((policy) => text(policy.subject_id)),
+    ...decisionLogs.map((log) => text(log.subject_id)),
+  ].filter(Boolean))
+  const subjects = data.collections.subjects.filter((subject) => subjectIds.has(text(subject.id)))
+  const sources = data.collections.sources.filter((source) => sourceIds.has(text(source.id)))
+  const ingestLogs = data.collections.ingestLogs.filter((log) =>
+    sourceIds.has(text(log.data_source_id)) || apiIds.has(text(log.api_resource_id)),
+  )
+  const tasks = data.collections.tasks.filter((task) => apiIds.has(text(task.api_resource_id)))
+  const streamingRuns = data.collections.streamingRuns.filter((run) =>
+    recordMatches(run, resourceIds, ['resource_id'])
+    || recordMatches(run, apiIds, ['api_resource_id']),
+  )
+  const streamingWindows = data.collections.streamingWindows.filter((window) =>
+    recordMatches(window, resourceIds, ['resource_id'])
+    || recordMatches(window, apiIds, ['api_resource_id']),
+  )
+
+  return buildRealtimeMonitorGraphs({
+    sources,
+    resources,
+    policies,
+    tasks,
+    decisionLogs,
+    ingestLogs,
+    subjects,
+    apis,
+    streamingRuns,
+    streamingWindows,
+    windowHours,
+  })
+}
+
 export async function fetchRealtimeMonitorData(windowHours: number): Promise<RealtimeMonitorData> {
   const since = windowHours > 0 ? new Date(Date.now() - windowHours * 3600_000).toISOString() : undefined
   const decisionFilter = since ? { requested_at: { $gte: since } } : undefined

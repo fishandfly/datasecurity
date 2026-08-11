@@ -95,25 +95,25 @@ const subjectsConfig: SecurityV3CollectionPageConfig = {
     { name: 'subject_type', label: '主体类型', type: 'select', required: true, options: [{ value: 'internal_app', label: '内部应用' }, { value: 'external_party', label: '外部访问方' }] },
     { name: 'organization_code', label: '组织编码', required: true }, { name: 'organization_name', label: '组织名称', required: true },
     { name: 'credential_ref', label: 'API Key 安全引用', required: true },
-    { name: 'allowed_api_codes_json', label: '授权 API 编码列表', type: 'json', required: true, defaultValue: [] },
-    { name: 'ip_whitelist_json', label: 'IP 白名单', type: 'json', defaultValue: [] }, { name: 'subject_status', label: '主体状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
+    { name: 'allowed_api_codes_json', label: '授权 API 编码列表', type: 'string-list', required: true, defaultValue: [] },
+    { name: 'ip_whitelist_json', label: 'IP 白名单', type: 'string-list', defaultValue: [] }, { name: 'subject_status', label: '主体状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
     { name: 'valid_from', label: '生效时间', type: 'datetime' }, { name: 'valid_to', label: '失效时间', type: 'datetime' },
   ],
 }
 
 const policiesConfig: SecurityV3CollectionPageConfig = {
   module: 'access', title: '访问策略', createLabel: '新增访问策略', collection: 'eco_resource_security_policies', filter: { policy_kind: 'access_policy' }, appends: ['subject', 'api_resource'],
-  columns: [{ key: 'policy_code', label: '策略编码' }, { key: 'policy_name', label: '策略名称' }, { key: 'subject', label: '数据应用' }, { key: 'api_resource', label: 'API' }, { key: 'scenario', label: '调用场景' }, { key: 'output_mode', label: '输出模式' }, { key: 'risk_threshold', label: '风险阈值' }, { key: 'policy_version', label: '策略版本' }, { key: 'publish_status', label: '发布状态', tone: 'status' }, { key: 'published_at', label: '发布时间', value: (record) => formatLocalDateTime(record.published_at) }],
+  columns: [{ key: 'policy_code', label: '策略编码' }, { key: 'policy_name', label: '策略名称' }, { key: 'subject', label: '数据应用' }, { key: 'api_resource', label: 'API' }, { key: 'scenario', label: '调用场景' }, { key: 'output_mode', label: '输出模式' }, { key: 'policy_version', label: '策略版本' }, { key: 'publish_status', label: '发布状态', tone: 'status' }, { key: 'published_at', label: '发布时间', value: (record) => formatLocalDateTime(record.published_at) }],
   fields: [
     { name: 'policy_code', label: '策略编码', required: true }, { name: 'policy_name', label: '策略名称', required: true }, { name: 'policy_kind', label: '策略类型', hidden: true, defaultValue: 'access_policy' },
     { name: 'resource_id', label: '数据资源', required: true, relation: { collection: 'eco_data_resources', labelKey: 'resource_name' } },
     { name: 'subject_id', label: '数据应用', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name' } },
     { name: 'api_resource_id', label: 'API', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
-    { name: 'scenario', label: '使用场景', required: true }, { name: 'source_ips_json', label: '来源 IP 范围', type: 'json', defaultValue: [] }, { name: 'allowed_time_ranges_json', label: '允许时段', type: 'json', defaultValue: [] },
+    { name: 'scenario', label: '使用场景', required: true }, { name: 'source_ips_json', label: '来源 IP 范围', type: 'string-list', defaultValue: [] }, { name: 'allowed_time_ranges_json', label: '允许时段', type: 'time-ranges', defaultValue: [] },
     { name: 'max_requests_per_minute', label: '每分钟请求上限', type: 'number', defaultValue: 60 }, { name: 'max_query_days', label: '最大查询天数', type: 'number', defaultValue: 1 }, { name: 'max_rows', label: '最大返回行数', type: 'number', defaultValue: 1000 },
-    { name: 'organization_scope_json', label: '组织范围', type: 'json', defaultValue: [] }, { name: 'region_scope_json', label: '区域范围', type: 'json', defaultValue: [] },
-    { name: 'output_mode', label: '输出模式', type: 'select', options: outputOptions, required: true }, { name: 'risk_threshold', label: '风险阈值', type: 'number', defaultValue: 70 }, { name: 'policy_status', label: '策略状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
-    { name: 'abnormal_access_rules_json', label: '异常访问处置规则', type: 'json', required: true, defaultValue: { offHours: { enabled: true, action: 'deny', riskScore: 70 }, highFrequency: { enabled: true, action: 'deny', riskScore: 70 }, queryRangeExceeded: { enabled: true, action: 'deny', riskScore: 60 }, rowLimitExceeded: { enabled: true, action: 'deny', riskScore: 70 }, scopeViolation: { enabled: true, action: 'deny', riskScore: 80 } } },
+    { name: 'organization_scope_json', label: '组织范围', type: 'string-list', defaultValue: [] }, { name: 'region_scope_json', label: '区域范围', type: 'string-list', defaultValue: [] },
+    { name: 'output_mode', label: '输出模式', type: 'select', options: outputOptions, required: true }, { name: 'policy_status', label: '策略状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
+    { name: 'abnormal_access_rules_json', label: '异常访问决策规则', type: 'abnormal-rules', required: true, defaultValue: { offHours: { enabled: true, action: 'deny' }, highFrequency: { enabled: true, action: 'deny' }, queryRangeExceeded: { enabled: true, action: 'deny' }, rowLimitExceeded: { enabled: true, action: 'deny' }, scopeViolation: { enabled: true, action: 'deny' } } },
   ],
   transformSaveValues: (values) => ({
     ...values,

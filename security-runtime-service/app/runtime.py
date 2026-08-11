@@ -611,12 +611,13 @@ def abnormal_access_rule(policy: dict[str, Any], key: str) -> dict[str, Any]:
     configured = _json_object(policy.get("abnormal_access_rules_json")).get(key)
     configured = configured if isinstance(configured, dict) else {}
     action = str(configured.get("action") or default["action"]).strip()
-    if action not in {"deny", "risk", "allow"}:
+    if action not in {"deny", "allow"}:
         action = str(default["action"])
     return {
         "enabled": bool(configured.get("enabled", default["enabled"])),
         "action": action,
-        "riskScore": max(0, min(100, int(configured.get("riskScore", default["riskScore"]) or 0))),
+        # 风险分仅用于审计证据，不再作为策略可配置的放行阈值。
+        "riskScore": int(default["riskScore"]),
     }
 
 
@@ -1582,9 +1583,6 @@ def authorize(request, body: bytes) -> RuntimeContext:
         extra_risk += 15
         add_risk_factor("identifierField", "直接标识符", 15, "请求包含可直接识别对象的字段")
     score = min(100, extra_risk)
-    threshold = int(policy.get("risk_threshold") or 70)
-    if score >= threshold:
-        raise policy_denied("RISK_REJECTED", score)
     return RuntimeContext(
         request_id=request_id,
         api=api,
@@ -3388,27 +3386,16 @@ def publish_policy(policy_id: int) -> dict[str, Any]:
         errors.append("最大查询天数必须在 1 到 31 之间")
     if not 1 <= int(policy.get("max_rows") or 0) <= 100000:
         errors.append("最大返回行数必须在 1 到 100000 之间")
-    if not 1 <= int(policy.get("risk_threshold") or 0) <= 100:
-        errors.append("风险阈值必须在 1 到 100 之间")
     rules = _json_object(policy.get("abnormal_access_rules_json"))
     for rule_name in DEFAULT_ABNORMAL_ACCESS_RULES:
         rule = rules.get(rule_name)
         if rule is None:
             continue
-        if not isinstance(rule, dict) or str(rule.get("action") or "") not in {"deny", "risk", "allow"}:
-            errors.append(f"异常访问规则 {rule_name} 的 action 必须是 deny、risk 或 allow")
+        if not isinstance(rule, dict) or str(rule.get("action") or "") not in {"deny", "allow"}:
+            errors.append(f"异常访问规则 {rule_name} 的 action 必须是 deny 或 allow")
             continue
         if "enabled" in rule and not isinstance(rule.get("enabled"), bool):
             errors.append(f"异常访问规则 {rule_name} 的 enabled 必须是布尔值")
-        if "riskScore" in rule:
-            risk_score = rule.get("riskScore")
-            if (
-                isinstance(risk_score, bool)
-                or not isinstance(risk_score, (int, float))
-                or not math.isfinite(float(risk_score))
-                or not 0 <= float(risk_score) <= 100
-            ):
-                errors.append(f"异常访问规则 {rule_name} 的 riskScore 必须在 0 到 100 之间")
     now = datetime.now(timezone.utc)
     if errors:
         execute(

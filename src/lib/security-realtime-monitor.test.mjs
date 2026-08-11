@@ -87,3 +87,12 @@ test('桑基节点带明细规则，页面可按集合过滤明细', () => {
   assert.match(monitorSource, /detail: taskDetailRule/)
   assert.match(monitorSource, /collections: \{/)
 })
+
+test('资源详情桑基图按资源、API、策略和数据源关系收敛范围', () => {
+  assert.match(monitorSource, /export function buildResourceRealtimeMonitorData\(/)
+  assert.match(monitorSource, /text\(resource\.id\) === targetResourceId/)
+  assert.match(monitorSource, /resourceIds\.has\(text\(policy\.resource_id\)\)/)
+  assert.match(monitorSource, /apiIds\.has\(text\(log\.api_resource_id\)\)/)
+  assert.match(monitorSource, /sourceIds\.has\(text\(log\.data_source_id\)\)/)
+  assert.match(monitorSource, /return buildRealtimeMonitorGraphs\(/)
+})

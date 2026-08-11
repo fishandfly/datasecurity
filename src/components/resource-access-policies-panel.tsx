@@ -382,7 +382,6 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
       { key: 'api_resource', label: 'API' },
       { key: 'output_mode', label: '输出模式' },
       { key: 'max_rows', label: '最大行数' },
-      { key: 'risk_threshold', label: '风险阈值' },
       { key: 'publish_status', label: '发布状态', tone: 'status' },
     ],
     fields: [
@@ -393,26 +392,25 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
       { name: 'subject_id', label: '数据应用', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name', filter: { subject_status: 'enabled' } } },
       { name: 'api_resource_id', label: '已发布 API', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name', filter: { resource_id: resourceId, api_status: 'enabled', publish_status: 'success' } } },
       { name: 'scenario', label: '调用场景标识（请求头 X-Scenario）', required: true, defaultValue: 'resource-data-query' },
-      { name: 'source_ips_json', label: '允许来源 IP/CIDR', type: 'json', defaultValue: [] },
-      { name: 'allowed_time_ranges_json', label: '允许调用时段（days/from/to）', type: 'json', defaultValue: [] },
-      { name: 'organization_scope_json', label: '组织范围', type: 'json', defaultValue: [] },
-      { name: 'region_scope_json', label: '区域范围', type: 'json', defaultValue: [] },
+      { name: 'source_ips_json', label: '允许来源 IP/CIDR', type: 'string-list', defaultValue: [] },
+      { name: 'allowed_time_ranges_json', label: '允许调用时段', type: 'time-ranges', defaultValue: [] },
+      { name: 'organization_scope_json', label: '组织范围', type: 'string-list', defaultValue: [] },
+      { name: 'region_scope_json', label: '区域范围', type: 'string-list', defaultValue: [] },
       { name: 'output_mode', label: '输出模式', type: 'select', required: true, defaultValue: 'detail', options: [{ value: 'detail', label: '明细' }, { value: 'masked', label: '脱敏明细' }, { value: 'aggregate', label: '聚合结果' }, { value: 'encrypted', label: '密态结果' }] },
       { name: 'max_requests_per_minute', label: '每分钟请求上限', type: 'number', required: true, defaultValue: 60 },
       { name: 'max_query_days', label: '最大查询天数', type: 'number', required: true, defaultValue: 1 },
       { name: 'max_rows', label: '最大返回行数', type: 'number', required: true, defaultValue: 1000 },
-      { name: 'risk_threshold', label: '风险拒绝阈值（1-100）', type: 'number', required: true, defaultValue: 70 },
       {
         name: 'abnormal_access_rules_json',
-        label: '异常访问处置规则（enabled/action/riskScore）',
-        type: 'json',
+        label: '异常访问决策规则',
+        type: 'abnormal-rules',
         required: true,
         defaultValue: {
-          offHours: { enabled: true, action: 'deny', riskScore: 70 },
-          highFrequency: { enabled: true, action: 'deny', riskScore: 70 },
-          queryRangeExceeded: { enabled: true, action: 'deny', riskScore: 60 },
-          rowLimitExceeded: { enabled: true, action: 'deny', riskScore: 70 },
-          scopeViolation: { enabled: true, action: 'deny', riskScore: 80 },
+          offHours: { enabled: true, action: 'deny' },
+          highFrequency: { enabled: true, action: 'deny' },
+          queryRangeExceeded: { enabled: true, action: 'deny' },
+          rowLimitExceeded: { enabled: true, action: 'deny' },
+          scopeViolation: { enabled: true, action: 'deny' },
         },
       },
       { name: 'policy_status', label: '策略状态', hidden: true, defaultValue: 'draft' },
@@ -438,7 +436,7 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
-        API Key 鉴权与主体 API 授权在数据应用中先行完成；这里只维护数据资源级策略：场景、来源 IP、时段、组织/区域范围、输出模式、查询与频率上限、风险阈值及异常访问处置。字段范围由 API 发布配置统一控制，不在访问策略中重复授权。
+        API Key 鉴权与主体 API 授权在数据应用中先行完成；这里只维护数据资源级策略：场景、来源 IP、时段、组织/区域范围、输出模式、查询与频率上限，以及异常访问的允许/拒绝决策。字段范围由 API 发布配置统一控制，不在访问策略中重复授权。
       </div>
       <SecurityV3CollectionPage config={config} embedded />
       <ResourceAccessDecisionLogs resourceId={resourceId} />

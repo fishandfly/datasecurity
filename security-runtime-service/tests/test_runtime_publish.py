@@ -516,8 +516,8 @@ def test_publish_policy_requires_subject_api_authorization():
             publish_policy(12)
 
 
-@pytest.mark.parametrize("risk_score", [-1, 101, "70", True])
-def test_publish_policy_rejects_invalid_rule_risk_score(risk_score):
+@pytest.mark.parametrize("action", ["risk", "record", ""])
+def test_publish_policy_rejects_non_binary_rule_action(action):
     policy = {
         "id": 12,
         "policy_code": "POL-12",
@@ -535,11 +535,11 @@ def test_publish_policy_rejects_invalid_rule_risk_score(risk_score):
         "max_rows": 1000,
         "risk_threshold": 70,
         "abnormal_access_rules_json": {
-            "queryRangeExceeded": {"enabled": True, "action": "risk", "riskScore": risk_score},
+            "queryRangeExceeded": {"enabled": True, "action": action},
         },
     }
     with patch("app.runtime.fetch_one", return_value=policy), patch("app.runtime.execute"):
-        with pytest.raises(ValueError, match="riskScore 必须在 0 到 100 之间"):
+        with pytest.raises(ValueError, match="action 必须是 deny 或 allow"):
             publish_policy(12)
 
 

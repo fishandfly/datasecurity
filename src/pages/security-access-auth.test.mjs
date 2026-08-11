@@ -4,12 +4,16 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const pageSource = readFileSync(resolve(process.cwd(), 'src/pages/security-v3-pages.tsx'), 'utf8')
+const collectionPageSource = readFileSync(resolve(process.cwd(), 'src/components/security-v3-collection-page.tsx'), 'utf8')
 const runtimeSource = readFileSync(resolve(process.cwd(), 'security-runtime-service/app/runtime.py'), 'utf8')
 const migrationSource = readFileSync(resolve(process.cwd(), 'scripts/migrate-nocobase-v3.mjs'), 'utf8')
 
 test('数据应用配置 API Key 安全引用和授权 API 清单', () => {
   assert.match(pageSource, /label: 'API Key 安全引用'/)
-  assert.match(pageSource, /name: 'allowed_api_codes_json'/)
+  assert.match(pageSource, /name: 'allowed_api_codes_json', label: '授权 API 编码列表', type: 'string-list'/)
+  assert.match(pageSource, /name: 'ip_whitelist_json', label: 'IP 白名单', type: 'string-list'/)
+  assert.match(collectionPageSource, /function StringListField/)
+  assert.match(collectionPageSource, /field\.type === 'string-list'/)
   assert.match(migrationSource, /field\.json\('allowed_api_codes_json'/)
   assert.doesNotMatch(pageSource, /name: 'field_allowlist_json'/)
 })
@@ -49,9 +53,22 @@ test('访问策略页面不再提供行为基线配置', () => {
   assert.doesNotMatch(pageSource, /rows_stddev/)
 })
 
-test('异常规则使用配置风险分和策略阈值且校验风险分范围', () => {
+test('访问策略抽屉使用结构化控件维护运行规则', () => {
+  assert.match(pageSource, /name: 'source_ips_json', label: '来源 IP 范围', type: 'string-list'/)
+  assert.match(pageSource, /name: 'allowed_time_ranges_json', label: '允许时段', type: 'time-ranges'/)
+  assert.match(pageSource, /name: 'organization_scope_json', label: '组织范围', type: 'string-list'/)
+  assert.match(pageSource, /name: 'region_scope_json', label: '区域范围', type: 'string-list'/)
+  assert.match(pageSource, /name: 'abnormal_access_rules_json', label: '异常访问决策规则', type: 'abnormal-rules'/)
+  assert.match(collectionPageSource, /function StringListField/)
+  assert.match(collectionPageSource, /function TimeRangesField/)
+  assert.match(collectionPageSource, /function AbnormalRulesField/)
+  assert.match(collectionPageSource, /normalizeTimeRanges\(value\)\.filter/)
+  assert.match(collectionPageSource, /normalizeAbnormalRules\(value\)/)
+})
+
+test('异常规则只按允许或拒绝直接决定访问结果', () => {
   assert.doesNotMatch(runtimeSource, /behaviorAnomaly/)
-  assert.match(runtimeSource, /if score >= threshold:/)
-  assert.doesNotMatch(runtimeSource, /score >= threshold or score >= 70/)
-  assert.match(runtimeSource, /riskScore 必须在 0 到 100 之间/)
+  assert.doesNotMatch(runtimeSource, /if score >= threshold:/)
+  assert.doesNotMatch(runtimeSource, /risk_threshold/)
+  assert.match(runtimeSource, /action 必须是 deny 或 allow/)
 })

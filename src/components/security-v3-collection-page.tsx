@@ -1,4 +1,4 @@
-import { Edit3, Eye, Plus, RefreshCw, Search, X, type LucideIcon } from 'lucide-react'
+import { Edit3, Eye, Plus, RefreshCw, Search, Trash2, X, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from './ui'
@@ -17,7 +17,7 @@ export type SecurityV3Option = { value: string; label: string }
 export type SecurityV3FormField = {
   name: string
   label: string
-  type?: 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'json' | 'datetime'
+  type?: 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'json' | 'datetime' | 'string-list' | 'time-ranges' | 'abnormal-rules'
   required?: boolean
   min?: number
   max?: number
@@ -70,9 +70,89 @@ export type SecurityV3CollectionPageConfig = {
 
 const inputClassName = 'h-10 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 text-[0.875rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)] disabled:cursor-not-allowed disabled:bg-[var(--surface-muted)]'
 
+type PolicyTimeRange = {
+  days: number[]
+  from: string
+  to: string
+}
+
+type AbnormalRuleKey = 'offHours' | 'highFrequency' | 'queryRangeExceeded' | 'rowLimitExceeded' | 'scopeViolation'
+type AbnormalRuleAction = 'deny' | 'allow'
+type AbnormalRule = { enabled: boolean; action: AbnormalRuleAction }
+type AbnormalRules = Record<AbnormalRuleKey, AbnormalRule>
+
+const abnormalRuleDefinitions: Array<{ key: AbnormalRuleKey; label: string }> = [
+  { key: 'offHours', label: '非允许时段调用' },
+  { key: 'highFrequency', label: '高频调用' },
+  { key: 'queryRangeExceeded', label: '查询时间范围超限' },
+  { key: 'rowLimitExceeded', label: '返回行数超限' },
+  { key: 'scopeViolation', label: '组织或区域范围越界' },
+]
+
+const weekdayOptions = [
+  { value: 1, label: '一' }, { value: 2, label: '二' }, { value: 3, label: '三' }, { value: 4, label: '四' },
+  { value: 5, label: '五' }, { value: 6, label: '六' }, { value: 7, label: '日' },
+]
+
+function parseStructuredValue(value: unknown, fallback: unknown) {
+  if (typeof value !== 'string') return value ?? fallback
+  try {
+    return JSON.parse(value)
+  } catch {
+    return fallback
+  }
+}
+
+function normalizeStringList(value: unknown) {
+  const source = parseStructuredValue(value, [])
+  return Array.isArray(source) ? Array.from(new Set(source.map((item) => String(item ?? '').trim()).filter(Boolean))) : []
+}
+
+function editableStringList(value: unknown) {
+  const source = parseStructuredValue(value, [])
+  return Array.isArray(source) ? source.map((item) => String(item ?? '')) : []
+}
+
+function normalizeTimeRanges(value: unknown) {
+  const source = parseStructuredValue(value, [])
+  if (!Array.isArray(source)) return []
+  return source.map((item) => {
+    const row = item && typeof item === 'object' ? item as Record<string, unknown> : {}
+    const days = Array.isArray(row.days)
+      ? Array.from(new Set(row.days.map((day) => Number(day)).filter((day) => Number.isInteger(day) && day >= 1 && day <= 7))).sort()
+      : []
+    return { days, from: String(row.from ?? '').slice(0, 5), to: String(row.to ?? '').slice(0, 5) }
+  }).filter((item) => item.days.length || item.from || item.to)
+}
+
+function defaultAbnormalRules(): AbnormalRules {
+  return Object.fromEntries(abnormalRuleDefinitions.map(({ key }) => [key, {
+    enabled: true,
+    action: 'deny' as const,
+  }])) as AbnormalRules
+}
+
+function normalizeAbnormalRules(value: unknown) {
+  const source = parseStructuredValue(value, {})
+  const record = source && typeof source === 'object' && !Array.isArray(source) ? source as Record<string, unknown> : {}
+  const defaults = defaultAbnormalRules()
+  return Object.fromEntries(abnormalRuleDefinitions.map(({ key }) => {
+    const raw = record[key]
+    const row = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
+    const action = ['deny', 'allow'].includes(String(row.action)) ? String(row.action) as AbnormalRuleAction : defaults[key].action
+    return [key, {
+      enabled: typeof row.enabled === 'boolean' ? row.enabled : defaults[key].enabled,
+      action,
+    }]
+  })) as AbnormalRules
+}
+
 function normalizeFormValue(field: SecurityV3FormField, value: unknown) {
   if (field.type === 'boolean') return Boolean(value ?? field.defaultValue ?? false)
   if (field.type === 'json') return JSON.stringify(value ?? field.defaultValue ?? {}, null, 2)
+  if (field.type === 'string-list') return normalizeStringList(value ?? field.defaultValue)
+  if (field.type === 'time-ranges') return normalizeTimeRanges(value ?? field.defaultValue)
+  if (field.type === 'abnormal-rules') return normalizeAbnormalRules(value ?? field.defaultValue)
   if (field.type === 'datetime' && value) return String(value).slice(0, 16)
   return value ?? field.defaultValue ?? ''
 }
@@ -86,9 +166,103 @@ function toSaveValues(fields: SecurityV3FormField[], form: Record<string, unknow
     const value = form[field.name]
     if (field.type === 'number') return [field.name, value === '' ? null : Number(value)]
     if (field.type === 'json') return [field.name, String(value || '').trim() ? JSON.parse(String(value)) : {}]
+    if (field.type === 'string-list') return [field.name, normalizeStringList(value)]
+    if (field.type === 'time-ranges') return [field.name, normalizeTimeRanges(value).filter((item) => item.days.length && item.from && item.to)]
+    if (field.type === 'abnormal-rules') return [field.name, normalizeAbnormalRules(value)]
     if (field.type === 'datetime') return [field.name, value ? new Date(String(value)).toISOString() : null]
     return [field.name, value]
   }))
+}
+
+function StructuredFieldLabel({ field }: { field: SecurityV3FormField }) {
+  return <div className="text-[0.8125rem] text-[var(--text-secondary)]">{field.label}{field.required ? ' *' : ''}</div>
+}
+
+function StringListField({
+  field,
+  value,
+  disabled,
+  onChange,
+}: {
+  field: SecurityV3FormField
+  value: unknown
+  disabled: boolean
+  onChange: (value: string[]) => void
+}) {
+  const values = editableStringList(value)
+  return (
+    <div className="space-y-2.5">
+      <StructuredFieldLabel field={field} />
+      <div className="space-y-2 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-3">
+        {values.map((item, index) => (
+          <div key={index} className="flex items-center gap-2">
+            <input aria-label={`${field.label}${index + 1}`} disabled={disabled} value={item} onChange={(event) => onChange(values.map((current, itemIndex) => itemIndex === index ? event.target.value : current))} className={inputClassName} />
+            <button type="button" title={`删除${field.label}`} disabled={disabled} onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[6px] text-[var(--text-muted)] hover:bg-[var(--surface)] hover:text-[var(--status-danger-text)] disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
+          </div>
+        ))}
+        {!values.length ? <div className="py-1 text-[0.8125rem] text-[var(--text-muted)]">未限制，留空表示不按此维度拦截。</div> : null}
+        <button type="button" disabled={disabled} onClick={() => onChange([...values, ''])} className="inline-flex items-center gap-1 text-[0.8125rem] font-medium text-[var(--primary)] hover:underline disabled:cursor-not-allowed disabled:opacity-40"><Plus className="h-3.5 w-3.5" />添加一项</button>
+      </div>
+    </div>
+  )
+}
+
+function TimeRangesField({
+  field,
+  value,
+  disabled,
+  onChange,
+}: {
+  field: SecurityV3FormField
+  value: unknown
+  disabled: boolean
+  onChange: (value: PolicyTimeRange[]) => void
+}) {
+  const ranges = normalizeTimeRanges(value)
+  const updateRange = (index: number, next: Partial<PolicyTimeRange>) => onChange(ranges.map((range, rangeIndex) => rangeIndex === index ? { ...range, ...next } : range))
+  return (
+    <div className="space-y-2.5">
+      <StructuredFieldLabel field={field} />
+      <div className="space-y-2 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-3">
+        {ranges.map((range, index) => (
+          <div key={index} className="space-y-3 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-[0.75rem] text-[var(--text-muted)]">时段 {index + 1}</span><button type="button" title="删除时段" disabled={disabled} onClick={() => onChange(ranges.filter((_, rangeIndex) => rangeIndex !== index))} className="rounded-[6px] p-1.5 text-[var(--text-muted)] hover:bg-[var(--surface-muted)] hover:text-[var(--status-danger-text)] disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-3.5 w-3.5" /></button></div>
+            <div className="flex flex-wrap gap-1.5">{weekdayOptions.map((day) => <label key={day.value} className={cn('flex h-8 w-8 cursor-pointer items-center justify-center rounded-[6px] border text-[0.75rem] font-medium', range.days.includes(day.value) ? 'border-[var(--primary)] bg-[var(--status-info-bg)] text-[var(--primary)]' : 'border-[var(--line)] text-[var(--text-muted)]', disabled && 'cursor-not-allowed opacity-60')}><input type="checkbox" className="sr-only" disabled={disabled} checked={range.days.includes(day.value)} onChange={(event) => updateRange(index, { days: event.target.checked ? [...range.days, day.value].sort() : range.days.filter((value) => value !== day.value) })} />{day.label}</label>)}</div>
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2"><input aria-label={`时段${index + 1}开始`} type="time" disabled={disabled} value={range.from} onChange={(event) => updateRange(index, { from: event.target.value })} className={inputClassName} /><span className="text-center text-[0.75rem] text-[var(--text-muted)]">至</span><input aria-label={`时段${index + 1}结束`} type="time" disabled={disabled} value={range.to} onChange={(event) => updateRange(index, { to: event.target.value })} className={inputClassName} /></div>
+          </div>
+        ))}
+        {!ranges.length ? <div className="py-1 text-[0.8125rem] text-[var(--text-muted)]">未设置允许时段，表示可在任意时间调用。</div> : null}
+        <button type="button" disabled={disabled} onClick={() => onChange([...ranges, { days: [1, 2, 3, 4, 5, 6, 7], from: '00:00', to: '23:59' }])} className="inline-flex items-center gap-1 text-[0.8125rem] font-medium text-[var(--primary)] hover:underline disabled:cursor-not-allowed disabled:opacity-40"><Plus className="h-3.5 w-3.5" />添加允许时段</button>
+      </div>
+    </div>
+  )
+}
+
+function AbnormalRulesField({
+  field,
+  value,
+  disabled,
+  onChange,
+}: {
+  field: SecurityV3FormField
+  value: unknown
+  disabled: boolean
+  onChange: (value: AbnormalRules) => void
+}) {
+  const rules = normalizeAbnormalRules(value)
+  const updateRule = (key: AbnormalRuleKey, next: Partial<AbnormalRule>) => onChange({ ...rules, [key]: { ...rules[key], ...next } })
+  return (
+    <div className="space-y-2.5">
+      <StructuredFieldLabel field={field} />
+      <div className="overflow-hidden rounded-[8px] border border-[var(--line)]">
+        <div className="grid grid-cols-[minmax(180px,1fr)_64px_110px] gap-2 bg-[var(--surface-muted)] px-3 py-2 text-[0.75rem] text-[var(--text-muted)]"><span>异常情形</span><span>启用</span><span>决策</span></div>
+        {abnormalRuleDefinitions.map(({ key, label }) => {
+          const rule = rules[key]
+          return <div key={key} className="grid grid-cols-[minmax(180px,1fr)_64px_110px] items-center gap-2 border-t border-[var(--line)] px-3 py-2.5 text-[0.8125rem]"><span className="text-[var(--text-secondary)]">{label}</span><label className="flex items-center"><input aria-label={`${label}启用`} type="checkbox" disabled={disabled} checked={rule.enabled} onChange={(event) => updateRule(key, { enabled: event.target.checked })} /></label><select aria-label={`${label}决策`} disabled={disabled} value={rule.action} onChange={(event) => updateRule(key, { action: event.target.value as AbnormalRuleAction })} className="h-9 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-2 text-[0.8125rem] text-[var(--text-secondary)] outline-none disabled:cursor-not-allowed disabled:bg-[var(--surface-muted)]"><option value="deny">拒绝</option><option value="allow">允许</option></select></div>
+        })}
+      </div>
+    </div>
+  )
 }
 
 function RecordDrawer({
@@ -167,20 +341,30 @@ function RecordDrawer({
           {fields.filter((field) => !field.hidden).map((field) => {
             const value = form[field.name]
             const options = field.relation ? relationOptions[field.name] || [] : field.options || []
+            const disabled = readOnly || Boolean(field.readOnly)
+            if (field.type === 'string-list') {
+              return <StringListField key={field.name} field={field} value={value} disabled={disabled} onChange={(nextValue) => setForm((current) => ({ ...current, [field.name]: nextValue }))} />
+            }
+            if (field.type === 'time-ranges') {
+              return <TimeRangesField key={field.name} field={field} value={value} disabled={disabled} onChange={(nextValue) => setForm((current) => ({ ...current, [field.name]: nextValue }))} />
+            }
+            if (field.type === 'abnormal-rules') {
+              return <AbnormalRulesField key={field.name} field={field} value={value} disabled={disabled} onChange={(nextValue) => setForm((current) => ({ ...current, [field.name]: nextValue }))} />
+            }
             return (
               <label key={field.name} className="block space-y-1.5 text-[0.8125rem] text-[var(--text-secondary)]">
                 <span>{field.label}{field.required ? ' *' : ''}</span>
                 {field.type === 'textarea' || field.type === 'json' ? (
-                  <textarea disabled={readOnly || field.readOnly} className="min-h-28 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 font-[inherit] text-[0.875rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--surface-muted)]" value={String(value ?? '')} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))} />
+                  <textarea disabled={disabled} className="min-h-28 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 font-[inherit] text-[0.875rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--surface-muted)]" value={String(value ?? '')} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))} />
                 ) : field.type === 'boolean' ? (
-                  <input type="checkbox" disabled={readOnly || field.readOnly} checked={Boolean(value)} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.checked }))} />
+                  <input type="checkbox" disabled={disabled} checked={Boolean(value)} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.checked }))} />
                 ) : field.type === 'select' || field.relation ? (
-                  <select disabled={readOnly || field.readOnly} className={inputClassName} value={String(value ?? '')} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))}>
+                  <select disabled={disabled} className={inputClassName} value={String(value ?? '')} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))}>
                     <option value="">请选择</option>
                     {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                 ) : (
-                  <input type={field.type === 'number' ? 'number' : field.type === 'datetime' ? 'datetime-local' : 'text'} min={field.min} max={field.max} disabled={readOnly || field.readOnly} className={inputClassName} value={String(value ?? '')} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))} />
+                  <input type={field.type === 'number' ? 'number' : field.type === 'datetime' ? 'datetime-local' : 'text'} min={field.min} max={field.max} disabled={disabled} className={inputClassName} value={String(value ?? '')} onChange={(event) => setForm((current) => ({ ...current, [field.name]: event.target.value }))} />
                 )}
               </label>
             )

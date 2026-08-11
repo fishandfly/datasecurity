@@ -59,7 +59,6 @@ def policy():
         "allowed_time_ranges_json": [],
         "organization_scope_json": [],
         "region_scope_json": [],
-        "risk_threshold": 70,
         "output_mode": "detail",
         "abnormal_access_rules_json": {},
     }
@@ -146,24 +145,8 @@ def test_disabled_subject_api_key_is_identified_before_status_rejection():
     load_policy.assert_not_called()
 
 
-def test_risk_action_uses_configured_score_and_policy_threshold():
+def test_legacy_risk_action_is_treated_as_direct_denial():
     test_policy = policy() | {
-        "risk_threshold": 80,
-        "abnormal_access_rules_json": {
-            "queryRangeExceeded": {"enabled": True, "action": "risk", "riskScore": 70},
-        },
-    }
-    context = authorize_with_policy(
-        test_policy,
-        {"startAt": "2026-07-01T00:00:00Z", "endAt": "2026-07-03T00:00:00Z"},
-    )
-
-    assert context.risk_score == 70
-
-
-def test_risk_action_is_rejected_at_configured_threshold():
-    test_policy = policy() | {
-        "risk_threshold": 70,
         "abnormal_access_rules_json": {
             "queryRangeExceeded": {"enabled": True, "action": "risk", "riskScore": 70},
         },
@@ -174,15 +157,15 @@ def test_risk_action_is_rejected_at_configured_threshold():
             {"startAt": "2026-07-01T00:00:00Z", "endAt": "2026-07-03T00:00:00Z"},
         )
 
-    assert denied.value.code == "RISK_REJECTED"
-    assert denied.value.risk_score == 70
+    assert denied.value.code == "QUERY_RANGE_EXCEEDED"
+    assert denied.value.risk_score == 60
 
 
 @pytest.mark.parametrize(
     "rule",
     [
-        {"enabled": True, "action": "allow", "riskScore": 70},
-        {"enabled": False, "action": "deny", "riskScore": 70},
+        {"enabled": True, "action": "allow"},
+        {"enabled": False, "action": "deny"},
     ],
 )
 def test_allow_and_disabled_rules_do_not_add_risk(rule):

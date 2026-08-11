@@ -10,6 +10,7 @@ const defaultPrimaryNavSource = navigationSource.match(/const DEFAULT_PRIMARY_NA
 const dataCatalogRoutesSource = readFileSync(resolve(process.cwd(), 'src/modules/DataCatalog/routes.tsx'), 'utf8')
 const registrySource = readFileSync(resolve(process.cwd(), 'src/modules/registry.ts'), 'utf8')
 const securityGovernanceRoutesSource = readFileSync(resolve(process.cwd(), 'src/modules/SecurityGovernance/routes.tsx'), 'utf8')
+const frontendNginxSource = readFileSync(resolve(process.cwd(), 'docker/frontend/nginx.conf'), 'utf8')
 
 test('前端应用保留 DataCatalog 门户壳和安全管控模块入口', () => {
   assert.equal(existsSync(resolve(process.cwd(), 'src/modules/DataCatalog/index.ts')), true)
@@ -29,6 +30,15 @@ test('管理员右上角保留 NBaaS 控制台入口并移除旧驾驶舱入口'
   assert.doesNotMatch(layoutSource, /驾驶舱/)
   assert.match(layoutSource, /控制台/)
   assert.doesNotMatch(appSource, /path="\/dashboard"/)
+})
+
+test('门户同源代理 NBaaS 控制台及其根路径静态资源', () => {
+  assert.match(frontendNginxSource, /location = \/admin \{[\s\S]*proxy_pass http:\/\/app\/admin;/)
+  assert.match(frontendNginxSource, /location \^~ \/admin\//)
+  assert.match(frontendNginxSource, /location \^~ \/assets\//)
+  assert.match(frontendNginxSource, /location = \/global\.css/)
+  assert.match(frontendNginxSource, /location = \/browser-checker\.js/)
+  assert.match(frontendNginxSource, /location \/ws \{[\s\S]*proxy_set_header Upgrade/)
 })
 
 test('数据安全管控门户只注册安全管控业务模块', () => {

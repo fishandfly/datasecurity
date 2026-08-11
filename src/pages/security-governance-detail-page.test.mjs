@@ -20,6 +20,7 @@ const collectionPageSource = readFileSync(resolve(process.cwd(), 'src/components
 const moduleTabsSource = readFileSync(resolve(process.cwd(), 'src/components/security-module-tabs.tsx'), 'utf8')
 const relationSource = readFileSync(resolve(process.cwd(), 'src/lib/resource-security-relations.ts'), 'utf8')
 const securityV3PagesSource = readFileSync(resolve(process.cwd(), 'src/pages/security-v3-pages.tsx'), 'utf8')
+const resourceSecuritySankeySource = readFileSync(resolve(process.cwd(), 'src/components/resource-security-sankey.tsx'), 'utf8')
 
 test('安全管控详情页支持返回原列表并兜底跳回数据资源列表', () => {
   assert.match(detailPageSource, /type SecurityGovernanceDetailLocationState = \{/)
@@ -32,10 +33,9 @@ test('安全管控详情页支持返回原列表并兜底跳回数据资源列�
   assert.match(detailPageSource, /返回数据资源/)
 })
 
-test('安全管控详情页按资源 ID 查询并提供资源目录详情与编辑入口', () => {
+test('安全管控详情页按资源 ID 查询并提供编辑入口', () => {
   assert.match(detailPageSource, /catalogItems\.find\(\(entry\) => entry\.id === id\)/)
-  assert.match(detailPageSource, /to=\{withEmbed\(`\/catalog\/\$\{item\.id\}`\)\}/)
-  assert.match(detailPageSource, /资源目录详情/)
+  assert.doesNotMatch(detailPageSource, /资源目录详情/)
   assert.match(detailPageSource, /ResourceFieldsPanel/)
   assert.doesNotMatch(detailPageSource, /SecurityGovernanceProfileEditDialog/)
   assert.doesNotMatch(detailPageSource, /SecurityGovernanceFieldEditDialog/)
@@ -92,7 +92,7 @@ test('顶部字段数量使用当前资源字段集合的实时记录数', () =>
 })
 
 test('安全管控详情页使用 tab 展示并将当前 tab 写入 URL', () => {
-  assert.match(detailPageSource, /type SecurityGovernanceDetailTabKey = 'overview' \| 'resourceFields' \| 'physicalTable' \| 'apiInfo' \| 'accessSubjects' \| 'accessPolicies' \| 'homomorphic' \| 'accessInfo' \| 'status' \| 'lineage'/)
+  assert.match(detailPageSource, /type SecurityGovernanceDetailTabKey = 'overview' \| 'resourceFields' \| 'physicalTable' \| 'apiInfo' \| 'accessSubjects' \| 'accessPolicies' \| 'homomorphic' \| 'accessInfo' \| 'lineage'/)
   assert.match(detailPageSource, /const requestedTab = searchParams\.get\('tab'\) as SecurityGovernanceDetailTabKey \| null/)
   assert.match(detailPageSource, /const detailTabs: Array<\[SecurityGovernanceDetailTabKey, string\]> = \[/)
   assert.match(detailPageSource, /\['overview', '基本信息'\]/)
@@ -104,16 +104,24 @@ test('安全管控详情页使用 tab 展示并将当前 tab 写入 URL', () => 
   assert.match(detailPageSource, /\['homomorphic', '同态加密'\]/)
   assert.doesNotMatch(detailPageSource, /\['accessInfo', '安全接入'\]/)
   assert.match(detailPageSource, /requestedTab === 'accessInfo' \? 'physicalTable' : requestedTab/)
-  assert.match(detailPageSource, /\['lineage', '血缘关系'\]/)
-  assert.match(detailPageSource, /\['status', '安全状态'\]/)
+  assert.match(detailPageSource, /\['lineage', '流转关系'\]/)
+  assert.doesNotMatch(detailPageSource, /\['status', '安全状态'\]/)
   assert.match(detailPageSource, /const handleTabChange = \(tabKey: SecurityGovernanceDetailTabKey\) => \{/)
   assert.match(detailPageSource, /pathname: location\.pathname/)
   assert.match(detailPageSource, /search: `\?\$\{buildTabSearchParams\(tabKey\)\.toString\(\)\}`/)
   assert.match(detailPageSource, /replace: true/)
   assert.match(detailPageSource, /state: locationState \?\? undefined/)
   assert.match(detailPageSource, /<ResourceFieldsPanel[\s\S]*resourceId=\{item\.id\}[\s\S]*homomorphicFieldCodes=\{securityRelations\.homomorphicFieldCodes\}/)
-  assert.match(detailPageSource, /LineageRelationGraph/)
-  assert.match(detailPageSource, /数据安全血缘关系/)
+  assert.match(detailPageSource, /<ResourceSecuritySankey resourceId=\{String\(item\.id\)\} \/>/)
+  assert.match(detailPageSource, /title="分层策略流转"/)
+  assert.doesNotMatch(detailPageSource, /LineageRelationGraph/)
+})
+
+test('资源详情血缘 Tab 使用当前资源范围的分层策略桑基图和节点明细', () => {
+  assert.match(resourceSecuritySankeySource, /fetchRealtimeMonitorData\(24\)/)
+  assert.match(resourceSecuritySankeySource, /buildResourceRealtimeMonitorData\(monitorData, resourceId, 24\)/)
+  assert.match(resourceSecuritySankeySource, /<SecuritySankeyCard graph=\{graph\}/)
+  assert.match(resourceSecuritySankeySource, /当前资源分层策略流转读取失败/)
 })
 
 test('资源详情 tab 在亮色背景下保持可读对比度', () => {
@@ -207,8 +215,11 @@ test('资源详情提供真实可执行的安全访问策略配置', () => {
   assert.match(accessPoliciesPanelSource, /name: 'api_resource_id'/)
   assert.doesNotMatch(accessPoliciesPanelSource, /name: 'field_allowlist_json'/)
   assert.match(accessPoliciesPanelSource, /name: 'abnormal_access_rules_json'/)
+  assert.match(accessPoliciesPanelSource, /type: 'string-list'/)
+  assert.match(accessPoliciesPanelSource, /type: 'time-ranges'/)
+  assert.match(accessPoliciesPanelSource, /type: 'abnormal-rules'/)
   assert.match(accessPoliciesPanelSource, /name: 'max_requests_per_minute'/)
-  assert.match(accessPoliciesPanelSource, /name: 'risk_threshold'/)
+  assert.doesNotMatch(accessPoliciesPanelSource, /name: 'risk_threshold'/)
   assert.match(accessPoliciesPanelSource, /publishSecurityPolicy/)
   assert.match(accessPoliciesPanelSource, /listSecurityV3Records\('security_policy_decision_logs'/)
   assert.match(accessPoliciesPanelSource, /访问策略最近执行日志/)
@@ -293,9 +304,6 @@ test('安全管控详情页与数据接入和日志审计模块口径保持一�
   assert.doesNotMatch(detailPageSource, /\/security-governance\/ingest\/logs/)
   assert.doesNotMatch(detailPageSource, /访问控制管理一致口径/)
   assert.doesNotMatch(detailPageSource, /数据同态加密一致口径/)
-  assert.match(detailPageSource, /日志链路审计一致口径/)
-  assert.match(detailPageSource, /完整版访问日志/)
-  assert.match(detailPageSource, /\/security-governance\/logs/)
   assert.doesNotMatch(detailPageSource, /操作链路追溯/)
   assert.doesNotMatch(detailPageSource, /审计报告生成/)
   assert.doesNotMatch(detailPageSource, /\/security-governance\/audit\/trace/)
@@ -317,7 +325,6 @@ test('基本信息只保留资源基础信息并使用真实运行指标', () =>
   assert.match(detailPageSource, /securityRelations\.decisionLogs\.length/)
   assert.match(detailPageSource, /title: '访问策略数量'/)
   assert.match(detailPageSource, /title: '接入抽样数量'/)
-  assert.match(detailPageSource, /latestStatRecord\.metainfo\.record_count/)
   assert.doesNotMatch(detailPageSource, /<TopicPill>资源编码：/)
   assert.doesNotMatch(detailPageSource, /<TopicPill>来源单位：/)
   assert.doesNotMatch(detailPageSource, /<TopicPill>来源系统：/)

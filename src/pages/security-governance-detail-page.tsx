@@ -1,7 +1,7 @@
-import { ArrowLeft, Database, DatabaseZap, FileSearch, FolderTree, LockKeyhole, Network, Pencil, ScrollText, ShieldCheck, Users } from 'lucide-react'
+import { ArrowLeft, Database, DatabaseZap, FolderTree, LockKeyhole, Network, Pencil, ShieldCheck, Users } from 'lucide-react'
 import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { LineageRelationGraph } from '../components/lineage-relation-graph'
+import { ResourceSecuritySankey } from '../components/resource-security-sankey'
 import { ResourceEditDialog } from '../components/resource-edit-dialog'
 import { ResourceFieldsPanel } from '../components/resource-fields-panel'
 import { ResourceApisPanel } from '../components/resource-apis-panel'
@@ -13,7 +13,7 @@ import { ResourceIngestValidationDialog } from '../components/resource-ingest-va
 import { ScenicPanel, StatCard, TopicPill } from '../components/ui'
 import { canManageCatalogResources } from '../lib/admin-role'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
-import { connectStatusMeta, formatMB, formatNumber, useLatestResourceBatchStat } from '../lib/nocobase-stat-data'
+import { connectStatusMeta, formatNumber, useLatestResourceBatchStat } from '../lib/nocobase-stat-data'
 import type { CatalogItem } from '../lib/nocobase-portal-data'
 import { useSecurityDataSources } from '../lib/nocobase-security-runtime'
 import { usePortalContext } from '../lib/portal-context'
@@ -26,7 +26,7 @@ type SecurityGovernanceDetailLocationState = {
   returnTo?: string
 }
 
-type SecurityGovernanceDetailTabKey = 'overview' | 'resourceFields' | 'physicalTable' | 'apiInfo' | 'accessSubjects' | 'accessPolicies' | 'homomorphic' | 'accessInfo' | 'status' | 'lineage'
+type SecurityGovernanceDetailTabKey = 'overview' | 'resourceFields' | 'physicalTable' | 'apiInfo' | 'accessSubjects' | 'accessPolicies' | 'homomorphic' | 'accessInfo' | 'lineage'
 
 function splitPhysicalTableNames(value: string) {
   return value
@@ -171,51 +171,6 @@ function formatBusinessTimeStatusLabel(status: string, hasConfiguredField: boole
   }
 }
 
-function buildBusinessTimeHint(item: CatalogItem, latestStatRecord: ReturnType<typeof useLatestResourceBatchStat>['data']['record']) {
-  const ageDays = latestStatRecord?.metainfo.business_time_age_days
-  const thresholdDays = latestStatRecord?.metainfo.business_time_stale_threshold_days
-
-  if (typeof ageDays === 'number' && Number.isFinite(ageDays)) {
-    if (typeof thresholdDays === 'number' && Number.isFinite(thresholdDays)) {
-      return `距今天 ${ageDays} 天，阈值 ${thresholdDays} 天`
-    }
-    return `距今天 ${ageDays} 天`
-  }
-
-  if (latestStatRecord?.metainfo.business_time_trace_summary?.trim()) {
-    return latestStatRecord.metainfo.business_time_trace_summary.trim()
-  }
-
-  if (item.updateCycle.trim()) {
-    return `更新周期：${item.updateCycle.trim()}`
-  }
-
-  return '尚未形成可用的业务时间判断信息'
-}
-
-function buildSecurityInsight(status: string, hasConfiguredField: boolean) {
-  switch (status.trim()) {
-    case 'fresh':
-      return '业务时间字段已正常识别，可据此判断当前资源是否按周期及时更新。'
-    case 'stale':
-      return '业务时间字段已识别，但最新业务时间明显滞后，建议检查上游更新任务与共享策略。'
-    case 'field_missing':
-      return '统计任务已尝试识别业务时间字段，但目标字段不存在，建议核对基准表结构。'
-    case 'table_missing':
-      return '当前资源缺少有效基准表，安全时效判断无法稳定落地，建议先补齐物理表配置。'
-    case 'missing':
-      return '业务时间字段存在，但最新记录没有可解析的业务时间值，建议检查源数据质量。'
-    case 'invalid':
-      return '业务时间值存在但格式无效，建议核对日期字段类型与清洗逻辑。'
-    case 'not_configured':
-      return '当前资源尚未配置业务时间字段，无法做时效性安全判读。'
-    default:
-      return hasConfiguredField
-        ? '当前资源已配置业务时间字段，等待最新统计任务形成完整安全时效判断。'
-        : '当前资源尚未配置业务时间字段，建议先维护基准表与业务时间字段。'
-  }
-}
-
 function normalizeText(value: unknown, fallback = '') {
   if (typeof value !== 'string') return fallback
   const normalized = value.trim()
@@ -341,7 +296,7 @@ export function SecurityGovernanceDetailPage() {
 
   const item = catalogItems.find((entry) => entry.id === id)
   const statEnabled = !isPortalLoading && Boolean(item)
-  const { data: latestBatchStat, error: latestBatchStatError } =
+  const { data: latestBatchStat } =
     useLatestResourceBatchStat(item?.id, statEnabled)
   const {
     data: securityRelations,
@@ -397,11 +352,6 @@ export function SecurityGovernanceDetailPage() {
     latestStatRecord?.metainfo.business_time_status ?? '',
     Boolean(baselineBusinessTimeField),
   )
-  const businessTimeHint = buildBusinessTimeHint(item, latestStatRecord)
-  const securityInsight = buildSecurityInsight(
-    latestStatRecord?.metainfo.business_time_status ?? '',
-    Boolean(baselineBusinessTimeField),
-  )
   const detailTabs: Array<[SecurityGovernanceDetailTabKey, string]> = [
     ['overview', '基本信息'],
     ['resourceFields', '资源字段'],
@@ -410,8 +360,7 @@ export function SecurityGovernanceDetailPage() {
     ['accessSubjects', '数据应用'],
     ['accessPolicies', '访问策略'],
     ['homomorphic', '同态加密'],
-    ['lineage', '血缘关系'],
-    ['status', '安全状态'],
+    ['lineage', '流转关系'],
   ]
   const normalizedRequestedTab = requestedTab === 'accessInfo' ? 'physicalTable' : requestedTab
   const activeTab = detailTabs.some(([key]) => key === normalizedRequestedTab)
@@ -465,28 +414,6 @@ export function SecurityGovernanceDetailPage() {
     ['资源说明', item.description || item.summary || '未补充', '', ''],
   ] as const
 
-  const latestStatusCards = [
-    {
-      title: '连通状态',
-      value: latestStatus?.label || '未产生统计',
-      description: latestBatchStat.latestPeriodCode ? `统计批次 ${latestBatchStat.latestPeriodCode}` : '暂无可用统计批次',
-    },
-    {
-      title: '业务时间状态',
-      value: businessTimeStatusLabel,
-      description: businessTimeHint,
-    },
-    {
-      title: '业务时间字段',
-      value: baselineBusinessTimeField || '未配置',
-      description: physicalTableState.baseline ? `基准表：${physicalTableState.baseline}` : '尚未识别基准表',
-    },
-    {
-      title: '最新记录量',
-      value: latestStatRecord ? `${formatNumber(latestStatRecord.metainfo.record_count ?? 0)} 条` : '未统计',
-      description: latestStatRecord ? `存储量 ${formatMB(latestStatRecord.metainfo.storage_bytes ?? 0)}` : '等待统计任务产出',
-    },
-  ]
   const dataAccessAlignmentItems: AlignmentItem[] = [
     {
       label: '数据源配置',
@@ -508,15 +435,6 @@ export function SecurityGovernanceDetailPage() {
       value: latestStatus?.label || '未产生统计',
       description: latestBatchStat.latestPeriodCode ? `统计批次 ${latestBatchStat.latestPeriodCode}` : businessTimeStatusLabel,
       icon: Network,
-    },
-  ]
-  const auditAlignmentItems: AlignmentItem[] = [
-    {
-      label: '完整版访问日志',
-      path: '/security-governance/logs',
-      value: `${securityRelations.accessPolicies.filter((policy) => policy.publish_status === 'success').length} 条已发布策略`,
-      description: `${securityRelations.apis.filter((api) => api.publish_status === 'success').length} 个已发布 API / 未命中策略默认拒绝`,
-      icon: FileSearch,
     },
   ]
 
@@ -630,17 +548,6 @@ export function SecurityGovernanceDetailPage() {
           <SectionHeader
             icon={<ShieldCheck className="h-5 w-5" />}
             title="基本信息"
-            action={(
-              <div className="flex flex-wrap items-center gap-2">
-                <Link
-                  to={withEmbed(`/catalog/${item.id}`)}
-                  state={{ returnTo: `${location.pathname}${location.search}` }}
-                  className="inline-flex h-10 items-center rounded-full border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 text-[0.8125rem] font-medium text-[var(--text-secondary)] transition hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                >
-                  资源目录详情
-                </Link>
-              </div>
-            )}
           />
 
           <ModuleAlignmentStrip
@@ -830,50 +737,8 @@ export function SecurityGovernanceDetailPage() {
 
       {activeTab === 'lineage' ? (
         <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
-          <SectionHeader icon={<FolderTree className="h-5 w-5" />} title="数据安全血缘关系" />
-          <LineageRelationGraph item={item} catalogItems={catalogItems} />
-        </section>
-      ) : null}
-
-      {activeTab === 'status' ? (
-        <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
-          <SectionHeader icon={<ScrollText className="h-5 w-5" />} title="安全状态" />
-
-          <ModuleAlignmentStrip
-            title="日志链路审计一致口径"
-            items={auditAlignmentItems}
-            withEmbed={withEmbed}
-          />
-
-          <div className="mt-5 rounded-[14px] border border-[var(--status-info-border)] bg-[linear-gradient(180deg,var(--status-info-bg),color-mix(in_srgb,var(--status-info-bg)_64%,var(--surface-raised)))] px-4 py-4 text-[0.875rem] leading-7 text-[var(--status-info-text)]">
-            {securityInsight}
-          </div>
-
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {latestStatusCards.map((card) => (
-              <div
-                key={card.title}
-                className="rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-4 shadow-[var(--shadow-soft)]"
-              >
-                <div className="text-[0.75rem] text-[var(--text-muted)]">{card.title}</div>
-                <div className="mt-2 text-[1.125rem] font-semibold leading-7 text-[var(--text-main)]">{card.value}</div>
-                <div className="mt-2 text-[0.75rem] leading-6 text-[var(--text-secondary)]">{card.description}</div>
-              </div>
-            ))}
-          </div>
-
-          {latestStatRecord?.metainfo.business_time_trace_summary?.trim() ? (
-            <div className="mt-5 rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-4 text-[0.8125rem] leading-7 text-[var(--text-secondary)] shadow-[var(--shadow-soft)]">
-              <div className="text-[0.875rem] font-semibold text-[var(--text-main)]">业务时间判定说明</div>
-              <div className="mt-2">{latestStatRecord.metainfo.business_time_trace_summary.trim()}</div>
-            </div>
-          ) : null}
-
-          {latestBatchStatError ? (
-            <div className="mt-5 rounded-[14px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-4 text-[0.8125rem] leading-7 text-[var(--status-danger-text)]">
-              {latestBatchStatError}
-            </div>
-          ) : null}
+          <SectionHeader icon={<FolderTree className="h-5 w-5" />} title="分层策略流转" />
+          <ResourceSecuritySankey resourceId={String(item.id)} />
         </section>
       ) : null}
 
