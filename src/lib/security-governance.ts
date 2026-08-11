@@ -323,7 +323,7 @@ function matchesKeyword(item: SecurityGovernanceJoinedItem, keyword: string) {
     item.securityCategory,
     item.securityLevel,
     item.dataSubjectType,
-    ...item.tags,
+    ...(item.tags || []),
     item.securityOwnerDept,
     item.securityOwnerUserName,
     item.assessmentBasis,

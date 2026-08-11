@@ -188,10 +188,6 @@ export function ResourceEditDialog({
   }
   const missingSecurityRequiredField = Boolean(securityGovernanceMode && form && (
     !form.dataSourceId.trim()
-    || !form.dataResourceTypeId.trim()
-    || !form.domainCategoryId.trim()
-    || !form.regionCategoryId.trim()
-    || !form.updateCycleId.trim()
     || !form.protectionLevel.trim()
     || !form.baselineTable.trim()
     || splitTags(tagsText).length === 0
@@ -278,24 +274,6 @@ export function ResourceEditDialog({
                       </select>
                     </label>
                     <label className="space-y-2">
-                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">资源类型 <span className="text-[var(--status-danger-text)]">*</span></div>
-                      <select value={form.dataResourceTypeId} onChange={(event) => updateField('dataResourceTypeId', event.target.value)} className={DIALOG_INPUT_CLASS}>
-                        <option value="">请选择资源类型</option>
-                        {editOptions.serviceTypeOptions
-                          .filter((option) => /数据库|数据表|表/i.test(`${option.label} ${option.value}`))
-                          .map((option) => <option key={option.value} value={option.value}>数据库表</option>)}
-                      </select>
-                    </label>
-                    <label className="space-y-2">
-                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">更新周期 <span className="text-[var(--status-danger-text)]">*</span></div>
-                      <select value={form.updateCycleId} onChange={(event) => updateField('updateCycleId', event.target.value)} className={DIALOG_INPUT_CLASS}>
-                        <option value="">请选择更新周期</option>
-                        {editOptions.updateCycleOptions.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label.trim() === '分钟' ? '分钟级' : option.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="space-y-2">
                       <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">防护层 <span className="text-[var(--status-danger-text)]">*</span></div>
                       <select value={form.protectionLevel} onChange={(event) => updateField('protectionLevel', event.target.value)} className={DIALOG_INPUT_CLASS}>
                         <option value="l1">普通共享层</option>
@@ -305,23 +283,10 @@ export function ResourceEditDialog({
                     </label>
                   </section>
 
-                  <section className="grid gap-4 xl:grid-cols-2">
-                    <TreeSelectField label="数据分类 *" tree={categoryTree} value={form.domainCategoryId} onChange={(nextValue) => updateField('domainCategoryId', nextValue)} />
-                    <TreeSelectField
-                      label="区域范围 *"
-                      tree={regionTree}
-                      value={form.regionCategoryId}
-                      onChange={(nextValue, label) => {
-                        updateField('regionCategoryId', nextValue)
-                        updateField('regionCoverage', label)
-                      }}
-                    />
-                  </section>
-
                   <label className="block space-y-2 rounded-2xl border border-[var(--dialog-panel-border)] bg-[linear-gradient(180deg,var(--dialog-panel-bg-start),var(--dialog-panel-bg-end))] p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">资源标签 <span className="text-[var(--status-danger-text)]">*</span></div>
-                      <span className="text-[0.75rem] text-[var(--text-muted)]">用于分类分级与标签组合策略匹配</span>
+                      <span className="text-[0.75rem] text-[var(--text-muted)]">用于分类分级与标签补全</span>
                     </div>
                     <textarea
                       value={tagsText}

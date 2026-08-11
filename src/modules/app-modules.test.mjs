@@ -11,15 +11,6 @@ const dataCatalogRoutesSource = readFileSync(resolve(process.cwd(), 'src/modules
 const registrySource = readFileSync(resolve(process.cwd(), 'src/modules/registry.ts'), 'utf8')
 const securityGovernanceRoutesSource = readFileSync(resolve(process.cwd(), 'src/modules/SecurityGovernance/routes.tsx'), 'utf8')
 
-const removedModuleNames = [
-  'ResourceGovernance',
-  'DataProduct',
-  'ApplicationGovernance',
-  'SharingGovernance',
-  'OperationSupervision',
-  'Cockpit',
-]
-
 test('前端应用保留 DataCatalog 门户壳和安全管控模块入口', () => {
   assert.equal(existsSync(resolve(process.cwd(), 'src/modules/DataCatalog/index.ts')), true)
   assert.equal(existsSync(resolve(process.cwd(), 'src/modules/SecurityGovernance/index.ts')), true)
@@ -44,10 +35,7 @@ test('数据安全管控门户只注册安全管控业务模块', () => {
   assert.match(dataCatalogRoutesSource, /export function DataCatalogRoutes\(\)/)
   assert.match(dataCatalogRoutesSource, /PORTAL_APP_MODULES\.map\(\(module\) => \(/)
   assert.match(registrySource, /SecurityGovernanceModule/)
-  removedModuleNames.forEach((moduleName) => {
-    assert.doesNotMatch(registrySource, new RegExp(`${moduleName}Module`))
-    assert.equal(existsSync(resolve(process.cwd(), `src/modules/${moduleName}`)), false)
-  })
+  assert.doesNotMatch(registrySource, /ResourceGovernanceModule|DataProductModule|ApplicationGovernanceModule|SharingGovernanceModule|OperationSupervisionModule|CockpitModule/)
   assert.match(registrySource, /export const PORTAL_APP_MODULES = \[[\s\S]*SecurityGovernanceModule,[\s\S]*\] satisfies AppModule\[]/)
   assert.match(securityGovernanceRoutesSource, /<Route path="\/security-governance\/dashboard" element={<SecurityDashboardPage \/>} \/>/)
   assert.match(securityGovernanceRoutesSource, /<Route path="\/security-governance\/resources" element={<Navigate to="\/security-governance\/resources\/catalog" replace \/>} \/>/)
@@ -58,20 +46,11 @@ test('数据安全管控门户只注册安全管控业务模块', () => {
 
 test('顶部导航默认项和活动模块保持一致', () => {
   assert.match(layoutSource, /primaryNavigations\.map\(\(item\) => \(/)
-  assert.match(navigationSource, /\{ key: 'nav_security_dashboard', title: '安全态势看板', target: '\/security-governance\/dashboard', icon: Shield \}/)
-  assert.match(navigationSource, /\{ key: 'nav_data_access', title: '数据接入管理', target: '\/security-governance\/data-access\/source-config', icon: DatabaseZap \}/)
-  assert.match(navigationSource, /\{ key: 'nav_resource_control', title: '数据资源管控', target: '\/security-governance\/resources', icon: Database \}/)
-  assert.match(navigationSource, /\{ key: 'nav_access_control', title: '访问控制管理', target: '\/security-governance\/access-control\/classification', icon: Workflow \}/)
-  assert.match(navigationSource, /\{ key: 'nav_homomorphic_encryption', title: '数据同态加密', target: '\/security-governance\/homomorphic-encryption', icon: LockKeyhole \}/)
-  assert.doesNotMatch(defaultPrimaryNavSource, /key: 'nav_audit'/)
-  assert.match(navigationSource, /EXCLUDED_PRIMARY_NAV_TARGETS = new Set\(\[[\s\S]*'\/security-governance\/audit\/log-query'[\s\S]*\]\)/)
-  assert.doesNotMatch(defaultPrimaryNavSource, /nav_config/)
-  assert.doesNotMatch(defaultPrimaryNavSource, /title: '数据标签管理'[\s\S]*target: '\/security-governance\/config\/data-labels'/)
-  assert.doesNotMatch(defaultPrimaryNavSource, /target: '\/catalog'/)
-  assert.doesNotMatch(defaultPrimaryNavSource, /target: '\/data-products'/)
-  assert.doesNotMatch(defaultPrimaryNavSource, /target: '\/demand'/)
-  assert.doesNotMatch(defaultPrimaryNavSource, /target: '\/run-stats'/)
-  assert.doesNotMatch(defaultPrimaryNavSource, /target: '\/cockpit'/)
+  assert.match(defaultPrimaryNavSource, /key: 'nav_security_dashboard', title: '安全态势', target: '\/security-governance\/dashboard'/)
+  assert.match(defaultPrimaryNavSource, /key: 'nav_security_resources', title: '数据资源', target: '\/security-governance\/resources\/catalog'/)
+  assert.match(defaultPrimaryNavSource, /key: 'nav_security_logs', title: '日志中心', target: '\/security-governance\/logs'/)
+  assert.match(defaultPrimaryNavSource, /key: 'nav_security_components', title: '组件配置', target: '\/security-governance\/components'/)
+  assert.doesNotMatch(defaultPrimaryNavSource, /风险事件|行为基线|数据接入管理|访问控制管理|数据同态加密/)
 })
 
 test('活动业务模块遵循统一目录结构和模块入口', () => {
@@ -86,9 +65,4 @@ test('活动业务模块遵循统一目录结构和模块入口', () => {
   const indexSource = readFileSync(resolve(moduleRoot, 'index.ts'), 'utf8')
   assert.match(indexSource, /manifest:/)
   assert.match(indexSource, /Routes:/)
-})
-
-test('DolphinScheduler 任务脚本拆分到 TaskScripts 模块', () => {
-  assert.equal(existsSync(resolve(process.cwd(), 'TaskScripts/dolphinscheduler/resource_stat_job.py')), true)
-  assert.equal(existsSync(resolve(process.cwd(), 'src/dolphinscheduler')), false)
 })

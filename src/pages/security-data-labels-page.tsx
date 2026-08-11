@@ -1,37 +1,30 @@
 import {
-  Archive,
-  CheckCircle2,
   ChevronDown,
-  Copy,
-  Download,
   Edit3,
-  FileClock,
   Filter,
-  KeyRound,
-  MoreHorizontal,
   Plus,
   Search,
-  ShieldAlert,
-  ShieldCheck,
   Tags,
-  Trash2,
   X,
 } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { SecurityModuleTabs } from '../components/security-module-tabs'
-import { Button, TopicPill } from '../components/ui'
-import { useFieldTagGenerationPolicies, type FieldTagGenerationPolicyRecord } from '../lib/nocobase-field-tags'
+import { Button } from '../components/ui'
+import {
+  saveFieldTagGenerationPolicy,
+  useFieldTagGenerationPolicies,
+  type FieldTagGenerationPolicyRecord,
+  type FieldTagGenerationRule,
+} from '../lib/nocobase-field-tags'
+import { toErrorMessage } from '../lib/nocobase-client'
 import { useSecurityGovernancePolicies, type SecurityGovernancePolicyRecord } from '../lib/nocobase-security-governance'
 import { usePortalContext } from '../lib/portal-context'
-import { joinSecurityGovernanceItems, resolveSecurityScopeLabel, type SecurityGovernanceJoinedItem } from '../lib/security-governance'
+import { joinSecurityGovernanceItems, type SecurityGovernanceJoinedItem } from '../lib/security-governance'
 import { cn } from '../lib/utils'
 
 type SensitivityLevel = '公开' | '内部' | '敏感' | '高敏感'
 type LabelStatus = '启用中' | '已禁用' | '待确认'
 type StatusFilter = '全部' | LabelStatus
-type UsageFilter = '全部' | '已使用' | '未使用'
-type SortBy = 'name' | 'createdAt' | 'usage'
 
 type DataLabelRecord = {
   id: string
@@ -41,39 +34,39 @@ type DataLabelRecord = {
   categoryGroup: string
   sensitivity: SensitivityLevel
   description: string
-  sourceNames: string[]
+  resourceNames: string[]
   policyNames: string[]
-  sourceCount: number
+  resourceCount: number
   policyCount: number
   status: LabelStatus
-  createdBy: string
   createdAt: string
   keywords: string[]
-  used: boolean
-  defaultPermission: string
-  retention: string
-  allowCrossDomain: boolean
-  allowExport: boolean
-  allowConfidentialCompute: boolean
-  usageTrend: number[]
 }
 
-type LabelAccumulator = Omit<DataLabelRecord, 'sourceNames' | 'policyNames' | 'sourceCount' | 'policyCount' | 'used' | 'keywords'> & {
-  sourceNames: Set<string>
+type LabelAccumulator = Omit<DataLabelRecord, 'resourceNames' | 'policyNames' | 'resourceCount' | 'policyCount' | 'keywords'> & {
+  resourceNames: Set<string>
   policyNames: Set<string>
   keywords: Set<string>
 }
 
-type CategoryNode = {
+type LabelTreeGroup = {
   id: string
-  label: string
-  count: number
-  children?: CategoryNode[]
+  name: string
+  labels: DataLabelRecord[]
 }
 
-const pageSizeOptions = [20, 50, 100]
+type TagRuleForm = {
+  id: string
+  title: string
+  enabled: boolean
+  collectionName: string
+  fieldName: string
+  logic: 'and' | 'or'
+  remark: string
+  rules: FieldTagGenerationRule[]
+}
 
-function normalizeText(value: string | null | undefined) {
+function normalizeText(value: unknown) {
   return String(value ?? '').trim()
 }
 
@@ -99,8 +92,6 @@ function inferDataType(value: string) {
   if (/用电|电费|客户|营销/.test(source)) return source.includes('客户') ? '客户信息' : '用电信息'
   if (/设备|台区|线路|站房|资产/.test(source)) return '设备数据'
   if (/运行|调控|负荷|告警/.test(source)) return '运行数据'
-  if (/财务|结算|账单/.test(source)) return '财务数据'
-  if (/人员|用户|账号/.test(source)) return '人员数据'
   return source || '运行数据'
 }
 
@@ -114,9 +105,7 @@ function inferBusinessDomain(value: string) {
 }
 
 function formatDate(value: string) {
-  const normalized = normalizeText(value)
-  if (!normalized) return ''
-  return normalized.slice(0, 10)
+  return normalizeText(value).slice(0, 10)
 }
 
 function sensitivityTone(level: SensitivityLevel) {
@@ -143,23 +132,9 @@ function statusTone(status: LabelStatus) {
   }
 }
 
-function uniqueValues(values: string[]) {
-  return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)))
-}
-
-function createTrend(seed: number) {
-  return [seed]
-}
-
-function lastCategorySegment(categoryPath: string) {
-  const parts = categoryPath.split('>').map((item) => item.trim()).filter(Boolean)
-  return parts[parts.length - 1] ?? categoryPath
-}
-
 function normalizeComparable(value: unknown) {
   if (typeof value === 'boolean') return value ? 'true' : 'false'
-  if (value === null || value === undefined) return ''
-  return String(value).trim()
+  return value === null || value === undefined ? '' : String(value).trim()
 }
 
 function readPolicyFieldValue(policy: SecurityGovernancePolicyRecord, fieldName: string) {
@@ -170,10 +145,9 @@ function readPolicyFieldValue(policy: SecurityGovernancePolicyRecord, fieldName:
   return row[camelName]
 }
 
-function matchesTagRule(policy: SecurityGovernancePolicyRecord, rule: FieldTagGenerationPolicyRecord['rules'][number]) {
+function matchesTagRule(policy: SecurityGovernancePolicyRecord, rule: FieldTagGenerationRule) {
   const actual = normalizeComparable(readPolicyFieldValue(policy, rule.fieldName))
   const expected = normalizeComparable(rule.value)
-
   switch (rule.operator) {
     case 'ne':
     case 'neq':
@@ -186,47 +160,35 @@ function matchesTagRule(policy: SecurityGovernancePolicyRecord, rule: FieldTagGe
       return !actual
     case 'notEmpty':
       return Boolean(actual)
-    case 'eq':
     default:
       return actual === expected
   }
 }
 
-function matchTagPolicyRecords(
-  tagPolicy: FieldTagGenerationPolicyRecord,
+function matchingItems(
+  policy: FieldTagGenerationPolicyRecord,
   policies: SecurityGovernancePolicyRecord[],
   joinedItems: SecurityGovernanceJoinedItem[],
 ) {
-  if (tagPolicy.collectionName !== 'eco_resource_security_policies') {
-    return []
-  }
-
-  const matchedPolicies = policies.filter((policy) => {
-    if (tagPolicy.rules.length === 0) return true
-    const checks = tagPolicy.rules.map((rule) => matchesTagRule(policy, rule))
-    return tagPolicy.logic === 'or' ? checks.some(Boolean) : checks.every(Boolean)
-  })
-  const matchedPolicyIds = new Set(matchedPolicies.map((policy) => policy.id))
+  if (policy.collectionName !== 'eco_resource_security_policies') return []
+  const matchedPolicyIds = new Set(
+    policies
+      .filter((item) => {
+        if (!policy.rules.length) return false
+        const checks = policy.rules.map((rule) => matchesTagRule(item, rule))
+        return policy.logic === 'or' ? checks.some(Boolean) : checks.every(Boolean)
+      })
+      .map((item) => item.id),
+  )
   return joinedItems.filter((item) => matchedPolicyIds.has(item.policyId))
-}
-
-function buildCategoryChildren(records: DataLabelRecord[], group: string, idPrefix: string) {
-  return uniqueValues(records.filter((item) => item.categoryGroup === group).map((item) => lastCategorySegment(item.categoryPath)))
-    .sort((left, right) => left.localeCompare(right, 'zh-CN', { numeric: true }))
-    .map((label) => ({
-      id: `${idPrefix}-${label}`,
-      label,
-      count: countBy(records, (item) => item.categoryGroup === group && item.categoryPath.includes(label)),
-    }))
 }
 
 function buildDataLabels(
   policies: SecurityGovernancePolicyRecord[],
   joinedItems: SecurityGovernanceJoinedItem[],
   tagPolicies: FieldTagGenerationPolicyRecord[],
-): DataLabelRecord[] {
-  const map = new Map<string, LabelAccumulator>()
-
+) {
+  const records = new Map<string, LabelAccumulator>()
   const ensureLabel = ({
     name,
     code,
@@ -250,46 +212,30 @@ function buildDataLabels(
     keywords?: string[]
     status?: LabelStatus
   }) => {
-    const normalizedName = normalizeText(name)
-    if (!normalizedName) return
-    const id = normalizeCode(code || normalizedName)
-    const existing = map.get(id)
+    const labelName = normalizeText(name)
+    if (!labelName) return
+    const id = normalizeCode(code || labelName)
     const currentStatus = status ?? (item.securityReviewStatus === 'pending' ? '待确认' : item.policyStatus === 'disabled' ? '已禁用' : '启用中')
-    const sourceName = item.name || item.resourceId
-    const policyName = policy?.policyName || item.securityCategory || item.policyId
-
+    const existing = records.get(id)
     if (existing) {
-      existing.sourceNames.add(sourceName)
-      existing.policyNames.add(policyName)
+      existing.resourceNames.add(item.name || item.resourceId)
+      existing.policyNames.add(policy?.policyName || item.policyId)
       keywords.forEach((keyword) => existing.keywords.add(keyword))
-      existing.keywords.add(item.securityCategory)
-      existing.keywords.add(item.securityLevel)
-      if (existing.status !== '待确认' && currentStatus === '待确认') {
-        existing.status = currentStatus
-      }
       return
     }
-
-    map.set(id, {
+    records.set(id, {
       id,
-      name: normalizedName,
+      name: labelName,
       code: id,
       categoryPath,
       categoryGroup,
       sensitivity,
       description,
       status: currentStatus,
-      createdBy: item.securityOwnerUserName || '未指定责任人',
       createdAt: formatDate(policy?.createdAt || item.updateTime),
-      sourceNames: new Set([sourceName]),
-      policyNames: new Set([policyName]),
-      keywords: new Set([normalizedName, item.securityCategory, item.securityLevel, item.dataSubjectType, ...keywords].filter(Boolean)),
-      defaultPermission: item.approvalRequired ? '需要审批' : resolveSecurityScopeLabel(item.accessScope || 'role'),
-      retention: sensitivity === '高敏感' ? '保留 10 年' : sensitivity === '敏感' ? '保留 6 年' : '永久保留',
-      allowCrossDomain: item.externalShareAllowed,
-      allowExport: item.exportScope !== 'forbidden' && item.exportScope !== 'none',
-      allowConfidentialCompute: item.desensitizationRequired || sensitivity !== '公开',
-      usageTrend: createTrend(map.size + normalizedName.length),
+      resourceNames: new Set([item.name || item.resourceId]),
+      policyNames: new Set([policy?.policyName || item.policyId]),
+      keywords: new Set([labelName, item.securityCategory, item.securityLevel, item.dataSubjectType, ...keywords].filter(Boolean)),
     })
   }
 
@@ -298,376 +244,227 @@ function buildDataLabels(
     const sensitivity = resolveSensitivity(item.securityLevel || item.securityCategory, item)
     const dataType = inferDataType(`${item.dataSubjectType} ${item.informationCategory} ${item.name}`)
     const domain = inferBusinessDomain(`${item.department} ${item.name} ${item.category}`)
-
     ensureLabel({
       name: item.securityCategory || '未标注安全分类',
       code: `security_category_${item.securityCategoryId || item.securityCategory}`,
-      categoryPath: `数据敏感度分类 > ${sensitivity}级别`,
+      categoryPath: `数据敏感度分类 / ${sensitivity}级别`,
       categoryGroup: '数据敏感度分类',
       sensitivity,
-      description: `用于标识 ${item.name} 的安全分类和访问控制基线。`,
+      description: `标识 ${item.name} 的安全分类和访问控制基线。`,
       item,
       policy,
       keywords: ['安全分类', item.assessmentBasis],
     })
-
     ensureLabel({
       name: item.securityLevel || `${sensitivity}级别`,
       code: `security_level_${item.securityLevelId || item.securityLevel || sensitivity}`,
-      categoryPath: `数据敏感度分类 > ${sensitivity}级别`,
+      categoryPath: `数据敏感度分类 / ${sensitivity}级别`,
       categoryGroup: '数据敏感度分类',
       sensitivity,
-      description: `用于判定 ${item.name} 的敏感度、保留期限和审批要求。`,
+      description: `判定 ${item.name} 的敏感度、保留期限和审批要求。`,
       item,
       policy,
       keywords: ['敏感度', item.riskNotes],
     })
-
     ensureLabel({
       name: item.dataSubjectType || dataType,
       code: `data_type_${item.dataSubjectTypeId || dataType}`,
-      categoryPath: `数据类型分类 > ${dataType}`,
+      categoryPath: `数据类型分类 / ${dataType}`,
       categoryGroup: '数据类型分类',
       sensitivity,
-      description: `用于区分 ${dataType} 的字段保护、导出和跨域使用策略。`,
+      description: `区分 ${dataType} 的字段保护、导出和跨域使用策略。`,
       item,
       policy,
       keywords: ['数据类型', dataType],
     })
-
     ensureLabel({
       name: domain,
       code: `business_domain_${domain}`,
-      categoryPath: `业务域分类 > ${domain}`,
+      categoryPath: `业务域分类 / ${domain}`,
       categoryGroup: '业务域分类',
       sensitivity,
-      description: `用于标识来自 ${domain} 的业务数据标签和责任边界。`,
+      description: `标识来自 ${domain} 的数据责任边界。`,
       item,
       policy,
       keywords: ['业务域', item.department],
     })
-
-    policy?.fieldSecurityProfileRows.forEach((field) => {
-      const fieldSensitivity = resolveSensitivity(field.securityLevel || field.sensitivityType, item)
-      field.sensitivityTags.forEach((tag) => {
-        ensureLabel({
-          name: tag,
-          code: `field_tag_${tag}`,
-          categoryPath: `自定义分类 > 字段标签`,
-          categoryGroup: '自定义分类',
-          sensitivity: fieldSensitivity,
-          description: `${field.fieldName || field.fieldCode} 字段的敏感标签，用于查询、脱敏和导出规则。`,
-          item,
-          policy,
-          keywords: [field.fieldName, field.fieldCode, field.informationCategory, field.riskNotes],
-          status: field.importantFieldFlag ? '待确认' : undefined,
-        })
-      })
-    })
   })
 
   tagPolicies.forEach((tagPolicy) => {
-    const matchedItems = matchTagPolicyRecords(tagPolicy, policies, joinedItems)
-    const matchedPolicies = policies.filter((policy) => matchedItems.some((item) => item.policyId === policy.id))
-
+    const items = matchingItems(tagPolicy, policies, joinedItems)
     tagPolicy.tags.forEach((tag) => {
-      const id = normalizeCode(`tag_policy_${tagPolicy.id}_${tag}`)
-      const sourceNames = new Set(matchedItems.map((item) => item.name || item.resourceId).filter(Boolean))
-      const policyNames = new Set([
-        tagPolicy.title,
-        ...matchedPolicies.map((policy) => policy.policyName || policy.policyCode).filter(Boolean),
-      ])
-      const sensitivity = resolveSensitivity(`${tag} ${matchedItems.map((item) => item.securityLevel).join(' ')}`, matchedItems[0])
-
-      map.set(id, {
+      const id = normalizeCode(`automatic_${tag}`)
+      const current = records.get(id)
+      const sensitivity = resolveSensitivity(`${tag} ${items.map((item) => item.securityLevel).join(' ')}`, items[0])
+      const resourceNames = new Set(items.map((item) => item.name || item.resourceId).filter(Boolean))
+      if (current) {
+        resourceNames.forEach((name) => current.resourceNames.add(name))
+        current.policyNames.add(tagPolicy.title)
+        current.keywords.add(tagPolicy.title)
+        return
+      }
+      records.set(id, {
         id,
         name: tag,
         code: id,
-        categoryPath: `标签插件 > ${tagPolicy.collectionName}.${tagPolicy.fieldName}`,
-        categoryGroup: '标签插件',
+        categoryPath: '自动补全标签 / 自定义规则',
+        categoryGroup: '自动补全标签',
         sensitivity,
-        description: `${tagPolicy.title} 生成的后端标签，目标字段为 ${tagPolicy.collectionName}.${tagPolicy.fieldName}。`,
+        description: tagPolicy.remark || `${tagPolicy.title} 自动生成的标签。`,
         status: tagPolicy.enabled ? '启用中' : '已禁用',
-        createdBy: '标签插件',
         createdAt: formatDate(tagPolicy.createdAt),
-        sourceNames,
-        policyNames,
-        keywords: new Set([
-          tag,
-          tagPolicy.title,
-          tagPolicy.collectionName,
-          tagPolicy.fieldName,
-          tagPolicy.remark,
-          ...tagPolicy.rules.map((rule) => `${rule.fieldName}${rule.operator}${rule.value}`),
-        ].filter(Boolean)),
-        defaultPermission: matchedItems.some((item) => item.approvalRequired) ? '需要审批' : '按标签策略',
-        retention: sensitivity === '高敏感' ? '保留 10 年' : sensitivity === '敏感' ? '保留 6 年' : '永久保留',
-        allowCrossDomain: matchedItems.some((item) => item.externalShareAllowed),
-        allowExport: matchedItems.some((item) => item.exportScope !== 'forbidden' && item.exportScope !== 'none'),
-        allowConfidentialCompute: matchedItems.some((item) => item.desensitizationRequired) || sensitivity !== '公开',
-        usageTrend: createTrend(sourceNames.size + policyNames.size),
+        resourceNames,
+        policyNames: new Set([tagPolicy.title]),
+        keywords: new Set([tag, tagPolicy.title, tagPolicy.collectionName, ...tagPolicy.rules.map((rule) => `${rule.fieldName}${rule.operator}${rule.value}`)]),
       })
     })
   })
 
-  return Array.from(map.values())
-    .map((item) => {
-      const sourceNames = Array.from(item.sourceNames)
-      const policyNames = Array.from(item.policyNames)
-      const keywords = Array.from(item.keywords)
-      return {
-        ...item,
-        sourceNames,
-        policyNames,
-        keywords,
-        sourceCount: sourceNames.length,
-        policyCount: policyNames.length,
-        used: sourceNames.length > 0 || policyNames.length > 0,
-      }
-    })
-    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }))
+  return Array.from(records.values())
+    .map((record) => ({
+      ...record,
+      resourceNames: Array.from(record.resourceNames),
+      policyNames: Array.from(record.policyNames),
+      keywords: Array.from(record.keywords),
+      resourceCount: record.resourceNames.size,
+      policyCount: record.policyNames.size,
+    }))
+    .sort((left, right) => left.categoryGroup.localeCompare(right.categoryGroup, 'zh-CN') || left.name.localeCompare(right.name, 'zh-CN'))
 }
 
-function countBy(records: DataLabelRecord[], predicate: (record: DataLabelRecord) => boolean) {
-  return records.filter(predicate).length
+function buildLabelTree(labels: DataLabelRecord[]) {
+  const groups = new Map<string, DataLabelRecord[]>()
+  labels.forEach((label) => groups.set(label.categoryGroup, [...(groups.get(label.categoryGroup) || []), label]))
+  return Array.from(groups.entries())
+    .map(([name, groupLabels]) => ({ id: normalizeCode(name), name, labels: groupLabels } satisfies LabelTreeGroup))
+    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
 }
 
-function buildCategoryTree(records: DataLabelRecord[]): CategoryNode[] {
-  const sensitivityChildren: CategoryNode[] = [
-    { id: 'sensitivity-public', label: '公开级别', count: countBy(records, (item) => item.sensitivity === '公开') },
-    { id: 'sensitivity-internal', label: '内部级别', count: countBy(records, (item) => item.sensitivity === '内部') },
-    { id: 'sensitivity-sensitive', label: '敏感级别', count: countBy(records, (item) => item.sensitivity === '敏感') },
-    { id: 'sensitivity-high', label: '高敏感级别', count: countBy(records, (item) => item.sensitivity === '高敏感') },
-  ]
-
-  return [
-    { id: 'all', label: '全部标签', count: records.length },
-    { id: 'group-sensitivity', label: '数据敏感度分类', count: records.filter((item) => item.categoryGroup === '数据敏感度分类').length, children: sensitivityChildren },
-    {
-      id: 'group-data-type',
-      label: '数据类型分类',
-      count: records.filter((item) => item.categoryGroup === '数据类型分类').length,
-      children: buildCategoryChildren(records, '数据类型分类', 'data-type'),
-    },
-    {
-      id: 'group-domain',
-      label: '业务域分类',
-      count: records.filter((item) => item.categoryGroup === '业务域分类').length,
-      children: buildCategoryChildren(records, '业务域分类', 'domain'),
-    },
-    {
-      id: 'group-tag-plugin',
-      label: '标签插件',
-      count: records.filter((item) => item.categoryGroup === '标签插件').length,
-      children: buildCategoryChildren(records, '标签插件', 'tag-plugin'),
-    },
-    { id: 'group-source', label: '数据来源分类', count: countBy(records, (item) => item.sourceCount > 0) },
-    { id: 'group-custom', label: '自定义分类', count: records.filter((item) => item.categoryGroup === '自定义分类').length },
-  ]
+function ruleSummary(policy: FieldTagGenerationPolicyRecord | undefined) {
+  if (!policy) return '未配置自动补全规则'
+  if (!policy.rules.length) return '规则条件未设置'
+  const first = policy.rules[0]
+  const operator = { eq: '等于', ne: '不等于', neq: '不等于', contains: '包含', notContains: '不包含', empty: '为空', notEmpty: '不为空' }[first.operator] || first.operator
+  const suffix = policy.rules.length > 1 ? ` 等 ${policy.rules.length} 个条件` : ''
+  return `${first.fieldName} ${operator} ${first.value || '-'}${suffix}`
 }
 
-function matchesCategory(record: DataLabelRecord, activeCategory: string) {
-  if (activeCategory === 'all') return true
-  if (activeCategory === 'group-sensitivity') return record.categoryGroup === '数据敏感度分类'
-  if (activeCategory === 'group-data-type') return record.categoryGroup === '数据类型分类'
-  if (activeCategory === 'group-domain') return record.categoryGroup === '业务域分类'
-  if (activeCategory === 'group-tag-plugin') return record.categoryGroup === '标签插件'
-  if (activeCategory === 'group-source') return record.sourceCount > 0
-  if (activeCategory === 'group-custom') return record.categoryGroup === '自定义分类'
-  if (activeCategory === 'sensitivity-public') return record.sensitivity === '公开'
-  if (activeCategory === 'sensitivity-internal') return record.sensitivity === '内部'
-  if (activeCategory === 'sensitivity-sensitive') return record.sensitivity === '敏感'
-  if (activeCategory === 'sensitivity-high') return record.sensitivity === '高敏感'
-  if (activeCategory.startsWith('data-type-')) return record.categoryPath.includes(activeCategory.replace('data-type-', ''))
-  if (activeCategory.startsWith('domain-')) return record.categoryPath.includes(activeCategory.replace('domain-', ''))
-  if (activeCategory.startsWith('tag-plugin-')) return record.categoryPath.includes(activeCategory.replace('tag-plugin-', ''))
-  return true
+function createRuleForm(label: DataLabelRecord, policy?: FieldTagGenerationPolicyRecord): TagRuleForm {
+  return {
+    id: policy?.id || '',
+    title: policy?.title || `标签补全-${label.name}`,
+    enabled: policy?.enabled ?? true,
+    collectionName: policy?.collectionName || 'eco_resource_security_policies',
+    fieldName: policy?.fieldName || 'security_tags',
+    logic: policy?.logic || 'and',
+    remark: policy?.remark || '',
+    rules: policy?.rules.length ? policy.rules : [{ fieldName: '', operator: 'eq', value: '' }],
+  }
 }
 
-function MiniTrend({ values }: { values: number[] }) {
-  const max = Math.max(...values, 1)
-  const points = values
-    .map((value, index) => {
-      const x = values.length <= 1 ? 0 : (index / (values.length - 1)) * 118
-      const y = 38 - (value / max) * 32
-      return `${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(' ')
-
-  return (
-    <svg viewBox="0 0 118 42" className="h-11 w-full" aria-hidden="true">
-      <polyline points={points} fill="none" stroke="var(--primary)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
-function CategoryTree({
-  nodes,
-  activeCategory,
-  onSelect,
+function LabelRuleDrawer({
+  label,
+  policies,
+  onClose,
+  onSaved,
 }: {
-  nodes: CategoryNode[]
-  activeCategory: string
-  onSelect: (id: string) => void
+  label: DataLabelRecord | null
+  policies: FieldTagGenerationPolicyRecord[]
+  onClose: () => void
+  onSaved: () => Promise<void>
 }) {
-  const [collapsedIds, setCollapsedIds] = useState<string[]>(['group-source', 'group-custom'])
+  const policy = label ? policies.find((item) => item.tags.includes(label.name)) : undefined
+  const [form, setForm] = useState<TagRuleForm>(() => label ? createRuleForm(label, policy) : createRuleForm({ name: '', id: '', code: '', categoryPath: '', categoryGroup: '', sensitivity: '公开', description: '', resourceNames: [], policyNames: [], resourceCount: 0, policyCount: 0, status: '启用中', createdAt: '', keywords: [] }))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
 
-  const renderNode = (node: CategoryNode, depth = 0): ReactNode => {
-    const hasChildren = Boolean(node.children?.length)
-    const isCollapsed = collapsedIds.includes(node.id)
-    const isActive = activeCategory === node.id
+  useEffect(() => {
+    if (label) setForm(createRuleForm(label, policy))
+    setError('')
+  }, [label, policy])
 
-    return (
-      <div key={node.id}>
-        <div
-          className={cn(
-            'mb-1 flex w-full min-w-0 items-center gap-2 rounded-[14px] px-3 py-3 text-left text-[0.875rem] font-medium transition',
-            isActive
-              ? 'bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] !text-white shadow-[0_14px_24px_rgba(var(--theme-strong-rgb),0.20)]'
-              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] hover:text-[var(--primary)]',
-          )}
-          style={{ paddingLeft: `${12 + depth * 18}px` }}
-        >
-          {hasChildren ? (
-            <button
-              type="button"
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px]"
-              onClick={() => {
-                setCollapsedIds((current) => current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id])
-              }}
-            >
-              <ChevronDown className={cn('h-4 w-4 transition', isCollapsed ? '-rotate-90' : '')} />
-            </button>
-          ) : (
-            <span className="h-6 w-6 shrink-0" />
-          )}
-          <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => onSelect(node.id)}>
-            <span className="min-w-0 flex-1 truncate">{node.label}</span>
-            <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[0.75rem]', isActive ? 'bg-white/18 text-white' : 'bg-[var(--surface-muted)] text-[var(--text-muted)]')}>
-              {node.count}
-            </span>
-          </button>
-        </div>
-        {hasChildren && !isCollapsed ? node.children?.map((child) => renderNode(child, depth + 1)) : null}
-      </div>
-    )
+  if (!label) return null
+
+  const updateRule = (index: number, key: keyof FieldTagGenerationRule, value: string) => {
+    setForm((current) => ({
+      ...current,
+      rules: current.rules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, [key]: value } : rule),
+    }))
   }
 
-  return (
-    <aside className="rounded-[18px] border border-[rgba(var(--theme-soft-rgb),0.18)] bg-[color-mix(in_srgb,var(--surface-glass)_92%,transparent)] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur xl:sticky xl:top-6 xl:self-start">
-      <div className="px-3 py-3">
-        <div className="text-[0.75rem] text-[var(--text-muted)]">标签分类导航</div>
-        <div className="mt-1 text-[0.95rem] font-semibold text-[var(--text-main)]">数据标签管理</div>
-      </div>
-      <nav>{nodes.map((node) => renderNode(node))}</nav>
-    </aside>
-  )
-}
-
-function LabelDrawer({
-  open,
-  mode,
-  label,
-  onClose,
-}: {
-  open: boolean
-  mode: 'create' | 'edit'
-  label: DataLabelRecord | null
-  onClose: () => void
-}) {
-  if (!open) return null
+  const save = async () => {
+    if (!form.rules.some((rule) => rule.fieldName.trim())) {
+      setError('请至少配置一个匹配条件')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await saveFieldTagGenerationPolicy(form.id, {
+        title: form.title,
+        enabled: form.enabled,
+        dataSourceKey: policy?.dataSourceKey || 'main',
+        collectionName: form.collectionName,
+        fieldName: form.fieldName,
+        logic: form.logic,
+        rules: form.rules,
+        tags: policy?.tags.length ? policy.tags : [label.name],
+        sort: policy?.sort || 999,
+        remark: form.remark,
+      })
+      await onSaved()
+      onClose()
+    } catch (caught) {
+      setError(toErrorMessage(caught, '保存标签规则失败'))
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return createPortal(
-    <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <aside
-        className="absolute inset-y-0 right-0 flex h-full max-h-[100dvh] w-full max-w-[560px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-strong)]"
-      >
-        <div className="flex shrink-0 items-center justify-between border-b border-[var(--line)] px-6 py-4">
+    <div className="fixed inset-0 z-50 bg-[rgba(8,18,32,0.46)]" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose() }}>
+      <aside className="absolute inset-y-0 right-0 flex h-full max-h-[100dvh] w-full max-w-[680px] flex-col overflow-hidden border-l border-[var(--line)] bg-[var(--surface)] shadow-[-24px_0_64px_rgba(8,18,32,0.22)]">
+        <header className="flex shrink-0 items-center justify-between border-b border-[var(--line)] px-6 py-4">
           <div>
-            <div className="text-[0.75rem] text-[var(--text-muted)]">{mode === 'create' ? '新建标签' : '编辑标签'}</div>
-            <h2 className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">{label?.name ?? '新建数据标签'}</h2>
+            <div className="text-[0.75rem] text-[var(--text-muted)]">标签管理</div>
+            <h2 className="mt-1 text-[1.125rem] font-semibold text-[var(--text-main)]">{label.name}</h2>
           </div>
-          <button type="button" className="rounded-[8px] p-2 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" onClick={onClose}>
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
-          <section className="space-y-3">
-            <h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">基本信息</h3>
+          <button type="button" title="关闭" className="rounded-[6px] p-2 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]" onClick={onClose}><X className="h-5 w-5" /></button>
+        </header>
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
+          <section className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div><div className="text-[0.75rem] text-[var(--text-muted)]">标签分类</div><div className="mt-1 text-[0.875rem] text-[var(--text-main)]">{label.categoryPath}</div></div>
+              <div><div className="text-[0.75rem] text-[var(--text-muted)]">敏感度</div><span className={cn('mt-1 inline-flex rounded-full border px-2.5 py-1 text-[0.75rem] font-medium', sensitivityTone(label.sensitivity))}>{label.sensitivity}</span></div>
+              <div><div className="text-[0.75rem] text-[var(--text-muted)]">关联资源</div><div className="mt-1 text-[0.875rem] text-[var(--text-main)]">{label.resourceCount} 个</div></div>
+              <div><div className="text-[0.75rem] text-[var(--text-muted)]">补全规则</div><div className="mt-1 text-[0.875rem] text-[var(--text-main)]">{policies.filter((item) => item.tags.includes(label.name)).length} 条</div></div>
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <div className="flex items-center justify-between gap-4"><div><h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">自动补全规则</h3><p className="mt-1 text-[0.8125rem] text-[var(--text-muted)]">满足全部条件时，系统自动写入此标签。</p></div><label className="flex shrink-0 items-center gap-2 text-[0.8125rem] text-[var(--text-secondary)]"><input type="checkbox" checked={form.enabled} onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))} />启用</label></div>
+            <label className="block space-y-1.5 text-[0.8125rem] text-[var(--text-secondary)]"><span>规则名称</span><input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} className="h-10 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 text-[0.875rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)]" /></label>
             <div className="grid gap-3 sm:grid-cols-2">
-              <input className="h-10 rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-3 text-[0.875rem] outline-none" defaultValue={label?.name ?? ''} placeholder="标签名称" />
-              <input className="h-10 rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-3 text-[0.875rem] outline-none" defaultValue={label?.code ?? ''} placeholder="英文代码" />
+              <label className="block space-y-1.5 text-[0.8125rem] text-[var(--text-secondary)]"><span>匹配对象</span><input value={form.collectionName} onChange={(event) => setForm((current) => ({ ...current, collectionName: event.target.value }))} className="h-10 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 text-[0.875rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)]" /></label>
+              <label className="block space-y-1.5 text-[0.8125rem] text-[var(--text-secondary)]"><span>标签写入字段</span><input value={form.fieldName} onChange={(event) => setForm((current) => ({ ...current, fieldName: event.target.value }))} className="h-10 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 text-[0.875rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)]" /></label>
             </div>
-            <input className="h-10 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-3 text-[0.875rem] outline-none" defaultValue={label?.categoryPath ?? ''} placeholder="标签分类" />
-            <textarea className="min-h-24 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 text-[0.875rem] outline-none" defaultValue={label?.description ?? ''} placeholder="标签描述" />
-          </section>
-          <section className="space-y-3">
-            <h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">敏感度配置</h3>
-            <div className="grid gap-2 sm:grid-cols-4">
-              {(['公开', '内部', '敏感', '高敏感'] as SensitivityLevel[]).map((level) => (
-                <label key={level} className={cn('rounded-[8px] border px-3 py-2 text-center text-[0.8125rem]', label?.sensitivity === level ? sensitivityTone(level) : 'border-[var(--line)] text-[var(--text-secondary)]')}>
-                  <input type="radio" name="sensitivity" className="sr-only" defaultChecked={label?.sensitivity === level} />
-                  {level}
-                </label>
+            <div className="flex items-center justify-between gap-3"><span className="text-[0.8125rem] text-[var(--text-secondary)]">匹配条件</span><select value={form.logic} onChange={(event) => setForm((current) => ({ ...current, logic: event.target.value as 'and' | 'or' }))} className="h-9 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-2 text-[0.75rem] text-[var(--text-secondary)] outline-none"><option value="and">全部满足</option><option value="or">任一满足</option></select></div>
+            <div className="space-y-2">
+              {form.rules.map((rule, index) => (
+                <div key={`${index}-${rule.fieldName}`} className="grid gap-2 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-3 sm:grid-cols-[minmax(0,1fr)_110px_minmax(0,1fr)_32px]">
+                  <input aria-label={`条件${index + 1}字段`} value={rule.fieldName} placeholder="字段名，如 policy_status" onChange={(event) => updateRule(index, 'fieldName', event.target.value)} className="h-9 min-w-0 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-2 text-[0.8125rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)]" />
+                  <select aria-label={`条件${index + 1}运算符`} value={rule.operator} onChange={(event) => updateRule(index, 'operator', event.target.value)} className="h-9 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-2 text-[0.8125rem] text-[var(--text-secondary)] outline-none"><option value="eq">等于</option><option value="ne">不等于</option><option value="contains">包含</option><option value="notContains">不包含</option><option value="empty">为空</option><option value="notEmpty">不为空</option></select>
+                  <input aria-label={`条件${index + 1}取值`} value={rule.value} placeholder="匹配值" disabled={rule.operator === 'empty' || rule.operator === 'notEmpty'} onChange={(event) => updateRule(index, 'value', event.target.value)} className="h-9 min-w-0 rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-2 text-[0.8125rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--surface-muted)]" />
+                  <button type="button" title="删除条件" disabled={form.rules.length === 1} className="rounded-[6px] text-[var(--text-muted)] hover:bg-[var(--surface)] hover:text-[var(--status-danger-text)] disabled:cursor-not-allowed disabled:opacity-40" onClick={() => setForm((current) => ({ ...current, rules: current.rules.filter((_, ruleIndex) => ruleIndex !== index) }))}>×</button>
+                </div>
               ))}
+              <button type="button" className="inline-flex items-center gap-1 text-[0.8125rem] font-medium text-[var(--primary)] hover:underline" onClick={() => setForm((current) => ({ ...current, rules: [...current.rules, { fieldName: '', operator: 'eq', value: '' }] }))}><Plus className="h-3.5 w-3.5" />添加条件</button>
             </div>
-            <div className="rounded-[8px] bg-[var(--surface-muted)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">
-              {label?.sensitivity === '高敏感' ? '建议启用最小授权、脱敏导出和同态加密约束。' : '根据标签敏感度自动匹配默认访问范围、保留期限和导出规则。'}
-            </div>
+            <label className="block space-y-1.5 text-[0.8125rem] text-[var(--text-secondary)]"><span>说明</span><textarea value={form.remark} onChange={(event) => setForm((current) => ({ ...current, remark: event.target.value }))} className="min-h-20 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-[0.875rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)]" placeholder="说明该标签的自动补全依据" /></label>
           </section>
-          <section className="space-y-3">
-            <h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">访问控制规则</h3>
-            <div className="grid gap-3">
-              {['全员可见', '指定角色可见', '需要审批'].map((item) => (
-                <label key={item} className="flex items-center gap-3 rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-4 py-3 text-[0.875rem] text-[var(--text-secondary)]">
-                  <input type="radio" name="permission" defaultChecked={label?.defaultPermission.includes(item.replace('指定', '').replace('全员', '公开'))} />
-                  {item}
-                </label>
-              ))}
-            </div>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {[
-                ['允许跨域使用', label?.allowCrossDomain],
-                ['允许导出', label?.allowExport],
-                ['允许同态计算', label?.allowConfidentialCompute],
-              ].map(([title, checked]) => (
-                <label key={String(title)} className="flex items-center justify-between rounded-[8px] bg-[var(--surface-muted)] px-3 py-2 text-[0.8125rem] text-[var(--text-secondary)]">
-                  {title}
-                  <input type="checkbox" defaultChecked={Boolean(checked)} />
-                </label>
-              ))}
-            </div>
-          </section>
-          <section className="space-y-3">
-            <h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">关联与使用统计</h3>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] p-3">
-                <div className="text-[0.75rem] text-[var(--text-muted)]">引用次数</div>
-                <div className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">{(label?.sourceCount ?? 0) + (label?.policyCount ?? 0)}</div>
-              </div>
-              <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] p-3">
-                <div className="text-[0.75rem] text-[var(--text-muted)]">关联数据源</div>
-                <div className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">{label?.sourceCount ?? 0}</div>
-              </div>
-              <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] p-3">
-                <div className="text-[0.75rem] text-[var(--text-muted)]">关联策略</div>
-                <div className="mt-1 text-[1.25rem] font-semibold text-[var(--text-main)]">{label?.policyCount ?? 0}</div>
-              </div>
-            </div>
-            <MiniTrend values={label?.usageTrend ?? []} />
-          </section>
-          <section className="space-y-3">
-            <h3 className="text-[0.95rem] font-semibold text-[var(--text-main)]">变更说明</h3>
-            <textarea className="min-h-20 w-full rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 text-[0.875rem] outline-none" placeholder="填写本次标签调整说明" />
-          </section>
+          {error ? <div className="rounded-[8px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-3 text-[0.8125rem] text-[var(--status-danger-text)]">{error}</div> : null}
         </div>
-        <div className="sticky bottom-0 z-10 grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--line)] bg-[var(--surface)] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-8px_24px_rgba(8,18,32,0.08)] sm:flex sm:items-center sm:justify-end">
-          <Button variant="secondary" className="w-full sm:w-auto" onClick={onClose}>取消</Button>
-          <Button variant="secondary" className="w-full sm:w-auto">保存为草稿</Button>
-          <Button variant="secondary" className="w-full sm:w-auto">保存标签</Button>
-          <Button className="w-full sm:w-auto">保存并启用</Button>
-        </div>
+        <footer className="sticky bottom-0 z-10 flex shrink-0 justify-end gap-2 border-t border-[var(--line)] bg-[var(--surface)] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-8px_24px_rgba(8,18,32,0.08)]"><Button variant="secondary" onClick={onClose}>取消</Button><Button disabled={saving} onClick={() => void save()}>{saving ? '保存中...' : '保存规则'}</Button></footer>
       </aside>
     </div>,
     document.body,
@@ -675,278 +472,80 @@ function LabelDrawer({
 }
 
 export function SecurityDataLabelsPage() {
-  const {
-    data: { catalogItems },
-    isLoading: isPortalLoading,
-  } = usePortalContext()
+  const { data: { catalogItems }, isLoading: isPortalLoading } = usePortalContext()
   const { data: securityPolicies, isLoading: isSecurityLoading } = useSecurityGovernancePolicies(true)
-  const { data: tagPolicies, isLoading: isTagPolicyLoading } = useFieldTagGenerationPolicies(true)
-  const [activeCategory, setActiveCategory] = useState('all')
+  const { data: tagPolicies, isLoading: isTagPolicyLoading, error: tagPolicyError, refresh } = useFieldTagGenerationPolicies(true)
   const [keyword, setKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('全部')
-  const [usageFilter, setUsageFilter] = useState<UsageFilter>('全部')
-  const [sortBy, setSortBy] = useState<SortBy>('usage')
-  const [pageSize, setPageSize] = useState(20)
-  const [selectedId, setSelectedId] = useState('')
-  const [drawerMode, setDrawerMode] = useState<'create' | 'edit' | null>(null)
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([])
+  const [editingLabel, setEditingLabel] = useState<DataLabelRecord | null>(null)
 
-  const joinedItems = useMemo(
-    () => joinSecurityGovernanceItems(securityPolicies, catalogItems),
-    [catalogItems, securityPolicies],
-  )
+  const joinedItems = useMemo(() => joinSecurityGovernanceItems(securityPolicies, catalogItems), [catalogItems, securityPolicies])
   const labels = useMemo(() => buildDataLabels(securityPolicies, joinedItems, tagPolicies), [joinedItems, securityPolicies, tagPolicies])
-  const categories = useMemo(() => buildCategoryTree(labels), [labels])
-
   const filteredLabels = useMemo(() => {
-    const normalizedKeyword = keyword.trim().toLowerCase()
-    return labels
-      .filter((label) => matchesCategory(label, activeCategory))
-      .filter((label) => {
-        if (!normalizedKeyword) return true
-        return [label.name, label.code, label.description, label.categoryPath, ...label.keywords]
-          .map((value) => value.toLowerCase())
-          .some((value) => value.includes(normalizedKeyword))
-      })
-      .filter((label) => statusFilter === '全部' || label.status === statusFilter)
-      .filter((label) => usageFilter === '全部' || (usageFilter === '已使用' ? label.used : !label.used))
-      .sort((left, right) => {
-        if (sortBy === 'createdAt') return right.createdAt.localeCompare(left.createdAt)
-        if (sortBy === 'usage') return (right.sourceCount + right.policyCount) - (left.sourceCount + left.policyCount)
-        return left.name.localeCompare(right.name, 'zh-CN', { numeric: true })
-      })
-  }, [activeCategory, keyword, labels, sortBy, statusFilter, usageFilter])
-
-  const visibleLabels = filteredLabels.slice(0, pageSize)
-  const selectedLabel = labels.find((label) => label.id === selectedId) ?? visibleLabels[0] ?? labels[0] ?? null
+    const query = keyword.trim().toLowerCase()
+    return labels.filter((label) => {
+      if (statusFilter !== '全部' && label.status !== statusFilter) return false
+      if (!query) return true
+      return [label.name, label.code, label.categoryPath, label.description, ...label.keywords].some((value) => value.toLowerCase().includes(query))
+    })
+  }, [keyword, labels, statusFilter])
+  const groups = useMemo(() => buildLabelTree(filteredLabels), [filteredLabels])
   const loading = isPortalLoading || isSecurityLoading || isTagPolicyLoading
-  const usedCount = labels.filter((label) => label.used).length
-  const pendingCount = labels.filter((label) => label.status === '待确认').length
-  const sensitiveCount = labels.filter((label) => label.sensitivity === '高敏感' || label.sensitivity === '敏感').length
-  const currentMonth = new Date().toISOString().slice(0, 7)
-  const newLabelsThisMonth = labels.filter((label) => label.createdAt.startsWith(currentMonth)).length
+  const rulePoliciesByTag = useMemo(() => {
+    const result = new Map<string, FieldTagGenerationPolicyRecord>()
+    tagPolicies.forEach((policy) => policy.tags.forEach((tag) => {
+      if (!result.has(tag)) result.set(tag, policy)
+    }))
+    return result
+  }, [tagPolicies])
 
-  const resetFilters = () => {
-    setKeyword('')
-    setStatusFilter('全部')
-    setUsageFilter('全部')
-    setSortBy('usage')
-    setActiveCategory('all')
-  }
+  useEffect(() => {
+    setExpandedGroups((current) => current.length ? current : groups.map((group) => group.id))
+  }, [groups])
 
-  const labelActions = (
-    <>
-      <Button className="gap-2" onClick={() => setDrawerMode('create')}>
-        <Plus className="h-4 w-4" />
-        新建标签
-      </Button>
-    </>
-  )
+  const toggleGroup = (id: string) => setExpandedGroups((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id])
+  const resetFilters = () => { setKeyword(''); setStatusFilter('全部') }
 
   return (
-    <>
-      <div className="space-y-5">
-        <SecurityModuleTabs module="tags" actions={labelActions} />
-        <div className="grid gap-5 xl:grid-cols-[288px_minmax(0,1fr)]">
-          <CategoryTree nodes={categories} activeCategory={activeCategory} onSelect={setActiveCategory} />
-          <div className="min-w-0 space-y-5">
-            <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-              {[
-                { title: '标签总数', value: labels.length, helper: `本月新增 ${newLabelsThisMonth} 个`, icon: Tags, tone: 'blue' },
-                { title: '已使用标签', value: usedCount, helper: `使用率 ${labels.length ? Math.round((usedCount / labels.length) * 100) : 0}%`, icon: CheckCircle2, tone: 'green' },
-                { title: '待确认标签', value: pendingCount, helper: '含新建与待完善标签', icon: FileClock, tone: 'amber' },
-                { title: '敏感标签数', value: sensitiveCount, helper: '需重点关注', icon: ShieldAlert, tone: 'red' },
-              ].map((metric) => (
-                <div key={metric.title} className="rounded-[8px] border border-[var(--line)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-4 shadow-[var(--shadow-soft)]">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-[0.75rem] text-[var(--text-muted)]">{metric.title}</div>
-                      <div className="mt-2 text-[1.75rem] font-semibold leading-none text-[var(--text-main)]">{metric.value.toLocaleString()}</div>
-                    </div>
-                    <div className={cn('flex h-10 w-10 items-center justify-center rounded-[8px] border',
-                      metric.tone === 'red'
-                        ? 'border-[#ef4444]/30 bg-[#ef4444]/10 text-[#ef4444]'
-                        : metric.tone === 'amber'
-                          ? 'border-[#f59e0b]/30 bg-[#f59e0b]/10 text-[#d97706]'
-                          : metric.tone === 'green'
-                            ? 'border-[#10b981]/25 bg-[#10b981]/10 text-[#10b981]'
-                            : 'border-[#3b82f6]/25 bg-[#3b82f6]/10 text-[#3b82f6]',
-                    )}>
-                      <metric.icon className="h-5 w-5" />
-                    </div>
-                  </div>
-                  <div className="mt-3 text-[0.8125rem] text-[var(--text-secondary)]">{metric.helper}</div>
-                </div>
-              ))}
-            </div>
-
-          <section className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] p-4 shadow-[var(--shadow-soft)]">
-            <div className="grid gap-3 xl:grid-cols-[minmax(260px,1fr)_150px_150px_170px_auto]">
-              <label className="flex h-10 min-w-0 items-center gap-2 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] px-3">
-                <Search className="h-4 w-4 text-[var(--text-muted)]" />
-                <input
-                  value={keyword}
-                  onChange={(event) => setKeyword(event.target.value)}
-                  className="min-w-0 flex-1 bg-transparent text-[0.875rem] text-[var(--text-main)] outline-none placeholder:text-[var(--text-muted)]"
-                  placeholder="搜索标签名称、描述、关键词"
-                />
-              </label>
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="h-10 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] px-3 text-[0.875rem] text-[var(--text-secondary)] outline-none">
-                {['全部', '启用中', '已禁用', '待确认'].map((item) => <option key={item}>{item}</option>)}
-              </select>
-              <select value={usageFilter} onChange={(event) => setUsageFilter(event.target.value as UsageFilter)} className="h-10 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] px-3 text-[0.875rem] text-[var(--text-secondary)] outline-none">
-                {['全部', '已使用', '未使用'].map((item) => <option key={item}>{item}</option>)}
-              </select>
-              <select value={sortBy} onChange={(event) => setSortBy(event.target.value as SortBy)} className="h-10 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] px-3 text-[0.875rem] text-[var(--text-secondary)] outline-none">
-                <option value="usage">按使用次数</option>
-                <option value="createdAt">按创建时间</option>
-                <option value="name">按名称</option>
-              </select>
-              <Button variant="secondary" className="gap-2" onClick={resetFilters}>
-                <Filter className="h-4 w-4" />
-                重置筛选
-              </Button>
-            </div>
-          </section>
-
-          {loading ? (
-            <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-5 py-10 text-center text-[0.875rem] text-[var(--text-muted)]">
-              正在加载数据标签...
-            </div>
-          ) : null}
-
-          <section className="overflow-hidden rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] shadow-[var(--shadow-soft)]">
-            <div className="grid grid-cols-[44px_minmax(220px,1.4fr)_minmax(170px,1fr)_110px_120px_110px_100px_120px_120px_140px] gap-3 border-b border-[var(--line)] bg-[var(--surface-muted)] px-4 py-3 text-[0.75rem] font-medium text-[var(--text-muted)]">
-              <span><input type="checkbox" aria-label="全选标签" /></span>
-              <span>标签名称</span>
-              <span>标签分类</span>
-              <span>敏感度级别</span>
-              <span>标签描述</span>
-              <span>关联数据源</span>
-              <span>关联策略</span>
-              <span>状态</span>
-              <span>创建人</span>
-              <span>操作</span>
-            </div>
-            <div className="overflow-x-auto">
-              {visibleLabels.map((label) => (
-                <div
-                  key={label.id}
-                  className={cn(
-                    'grid min-w-[1280px] grid-cols-[44px_minmax(220px,1.4fr)_minmax(170px,1fr)_110px_120px_110px_100px_120px_120px_140px] gap-3 border-b border-[var(--line)] px-4 py-3 text-[0.8125rem]',
-                    selectedLabel?.id === label.id ? 'bg-[color-mix(in_srgb,var(--status-info-bg)_42%,transparent)]' : 'bg-[var(--surface-raised)]',
-                  )}
-                >
-                  <span className="flex items-center"><input type="checkbox" aria-label={`选择${label.name}`} /></span>
-                  <button type="button" className="min-w-0 text-left" onClick={() => setSelectedId(label.id)}>
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="h-2.5 w-2.5 rounded-full bg-[var(--primary)]" />
-                      <span className="truncate font-semibold text-[var(--text-main)] hover:text-[var(--primary)]">{label.name}</span>
-                    </span>
-                    <span className="mt-1 block truncate text-[0.75rem] text-[var(--text-muted)]">{label.code}</span>
-                  </button>
-                  <span className="min-w-0 truncate text-[var(--text-secondary)]" title={label.categoryPath}>{label.categoryPath}</span>
-                  <span><span className={cn('inline-flex rounded-full border px-2.5 py-1 text-[0.75rem] font-medium', sensitivityTone(label.sensitivity))}>{label.sensitivity}</span></span>
-                  <span className="min-w-0 truncate text-[var(--text-secondary)]" title={label.description}>{label.description}</span>
-                  <button type="button" className="text-left font-medium text-[var(--primary)]">{label.sourceCount}</button>
-                  <button type="button" className="text-left font-medium text-[var(--primary)]">{label.policyCount}</button>
-                  <span className="flex items-center gap-2">
-                    <span className={cn('inline-flex rounded-full border px-2.5 py-1 text-[0.75rem] font-medium', statusTone(label.status))}>{label.status}</span>
-                  </span>
-                  <span className="flex min-w-0 items-center gap-2 text-[var(--text-secondary)]">
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-muted)] text-[0.75rem] text-[var(--primary)]">{label.createdBy.slice(0, 1)}</span>
-                    <span className="min-w-0 truncate">{label.createdBy}</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <button type="button" className="rounded-[6px] p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--primary)]" onClick={() => { setSelectedId(label.id); setDrawerMode('edit') }}><Edit3 className="h-4 w-4" /></button>
-                    <button type="button" className="rounded-[6px] p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--primary)]"><Copy className="h-4 w-4" /></button>
-                    <button type="button" className="rounded-[6px] p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] hover:text-[var(--status-danger-text)]"><Trash2 className="h-4 w-4" /></button>
-                    <button type="button" className="rounded-[6px] p-1.5 text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]"><MoreHorizontal className="h-4 w-4" /></button>
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-[0.8125rem] text-[var(--text-secondary)]">
-              <span>共 {filteredLabels.length.toLocaleString()} 个标签，当前显示 {visibleLabels.length.toLocaleString()} 个</span>
-              <div className="flex items-center gap-2">
-                <span>每页</span>
-                <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} className="h-9 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] px-2 outline-none">
-                  {pageSizeOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-                </select>
-              </div>
-            </div>
-          </section>
-
-          {selectedLabel ? (
-            <section className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
-              <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] p-5 shadow-[var(--shadow-soft)]">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <TopicPill>标签详情</TopicPill>
-                    <h2 className="mt-3 text-[1.35rem] font-semibold text-[var(--text-main)]">{selectedLabel.name}</h2>
-                    <div className="mt-2 text-[0.8125rem] text-[var(--text-muted)]">{selectedLabel.code} · {selectedLabel.categoryPath}</div>
-                  </div>
-                  <Button variant="secondary" className="gap-2" onClick={() => setDrawerMode('edit')}>
-                    <Edit3 className="h-4 w-4" />
-                    编辑
-                  </Button>
-                </div>
-                <p className="mt-4 text-[0.875rem] leading-7 text-[var(--text-secondary)]">{selectedLabel.description}</p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {selectedLabel.keywords.slice(0, 8).map((keywordItem) => (
-                    <span key={keywordItem} className="rounded-full border border-[var(--line)] bg-[var(--surface-muted)] px-3 py-1 text-[0.75rem] text-[var(--text-secondary)]">{keywordItem}</span>
-                  ))}
-                </div>
-                <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  {[
-                    { title: '默认访问权限', value: selectedLabel.defaultPermission, icon: KeyRound },
-                    { title: '允许跨域使用', value: selectedLabel.allowCrossDomain ? '允许' : '禁止', icon: Archive },
-                    { title: '允许导出', value: selectedLabel.allowExport ? '允许' : '禁止', icon: Download },
-                    { title: '允许同态计算', value: selectedLabel.allowConfidentialCompute ? '允许' : '禁止', icon: ShieldCheck },
-                  ].map((item) => (
-                    <div key={item.title} className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-4">
-                      <div className="flex items-center gap-2 text-[0.75rem] text-[var(--text-muted)]">
-                        <item.icon className="h-4 w-4 text-[var(--primary)]" />
-                        {item.title}
-                      </div>
-                      <div className="mt-2 font-semibold text-[var(--text-main)]">{item.value}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] p-5 shadow-[var(--shadow-soft)]">
-                <h2 className="text-[1rem] font-semibold text-[var(--text-main)]">使用情况分析</h2>
-                <div className="mt-4">
-                  <MiniTrend values={selectedLabel.usageTrend} />
-                </div>
-                <div className="mt-4 space-y-3">
-                  <div>
-                    <div className="mb-2 text-[0.75rem] text-[var(--text-muted)]">Top 5 使用数据源</div>
-                    {selectedLabel.sourceNames.slice(0, 5).map((sourceName) => (
-                      <div key={sourceName} className="flex items-center justify-between border-t border-[var(--line)] py-2 text-[0.8125rem]">
-                        <span className="truncate text-[var(--text-secondary)]">{sourceName}</span>
-                        <span className="text-[var(--primary)]">查看</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div>
-                    <div className="mb-2 text-[0.75rem] text-[var(--text-muted)]">变更历史时间线</div>
-                    {['创建标签', '更新敏感度', '启用标签'].map((event, index) => (
-                      <div key={event} className="grid grid-cols-[18px_minmax(0,1fr)] gap-2 text-[0.8125rem]">
-                        <span className="mt-1 h-2.5 w-2.5 rounded-full bg-[var(--primary)]" />
-                        <span className="border-l border-[var(--line)] pb-3 pl-3 text-[var(--text-secondary)]">
-                          {selectedLabel.createdAt} · {selectedLabel.createdBy} · {event}{index === 1 ? '，完成规则校验' : ''}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
-          ) : null}
-          </div>
+    <div className="space-y-5">
+      <section className="overflow-hidden rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] shadow-[var(--shadow-soft)]">
+        <div className="flex flex-col gap-4 border-b border-[var(--line)] px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div><h1 className="text-[1.125rem] font-semibold text-[var(--text-main)]">标签管理</h1><p className="mt-1 text-[0.8125rem] text-[var(--text-muted)]">标签按分类层级展示，自动补全规则在标签编辑中直接维护。</p></div>
+          <div className="flex flex-wrap items-center gap-2 text-[0.8125rem] text-[var(--text-secondary)]"><span>共 {labels.length} 个标签</span><span className="h-3 border-l border-[var(--line)]" /><span>{tagPolicies.length} 条自动补全规则</span></div>
         </div>
-      </div>
-      <LabelDrawer open={drawerMode !== null} mode={drawerMode ?? 'create'} label={drawerMode === 'create' ? null : selectedLabel} onClose={() => setDrawerMode(null)} />
-    </>
+        <div className="grid gap-3 border-b border-[var(--line)] bg-[var(--surface-muted)] p-4 lg:grid-cols-[minmax(280px,1fr)_150px_auto]">
+          <label className="flex h-10 min-w-0 items-center gap-2 rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-3"><Search className="h-4 w-4 text-[var(--text-muted)]" /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[0.875rem] text-[var(--text-main)] outline-none placeholder:text-[var(--text-muted)]" placeholder="搜索标签名称、分类或自动补全规则" /></label>
+          <select aria-label="标签状态" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="h-10 rounded-[8px] border border-[var(--line)] bg-[var(--surface-raised)] px-3 text-[0.875rem] text-[var(--text-secondary)] outline-none"><option value="全部">全部状态</option><option value="启用中">启用中</option><option value="已禁用">已禁用</option><option value="待确认">待确认</option></select>
+          <Button variant="secondary" className="gap-2" onClick={resetFilters}><Filter className="h-4 w-4" />重置</Button>
+        </div>
+        {tagPolicyError ? <div className="border-b border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-5 py-3 text-[0.8125rem] text-[var(--status-warning-text)]">自动补全规则暂不可读取：{tagPolicyError}</div> : null}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1120px] border-collapse text-left text-[0.8125rem]">
+            <thead className="bg-[var(--surface-muted)] text-[var(--text-muted)]"><tr><th className="w-[28%] border-b border-[var(--line)] px-5 py-3 font-medium">标签名称</th><th className="w-[18%] border-b border-[var(--line)] px-4 py-3 font-medium">分类层级</th><th className="w-28 border-b border-[var(--line)] px-4 py-3 font-medium">敏感度</th><th className="w-36 border-b border-[var(--line)] px-4 py-3 font-medium">关联范围</th><th className="border-b border-[var(--line)] px-4 py-3 font-medium">自动补全规则</th><th className="w-28 border-b border-[var(--line)] px-4 py-3 font-medium">状态</th><th className="w-20 border-b border-[var(--line)] px-4 py-3 font-medium">操作</th></tr></thead>
+            <tbody>
+              {groups.map((group) => {
+                const expanded = expandedGroups.includes(group.id)
+                return (
+                  <Fragment key={group.id}>
+                    <tr key={group.id} className="bg-[color-mix(in_srgb,var(--primary)_7%,var(--surface-raised))]">
+                      <td colSpan={7} className="border-b border-[var(--line)] px-5 py-3"><button type="button" className="flex items-center gap-2 font-semibold text-[var(--text-main)] hover:text-[var(--primary)]" onClick={() => toggleGroup(group.id)}><ChevronDown className={cn('h-4 w-4 transition-transform', expanded ? '' : '-rotate-90')} /><Tags className="h-4 w-4 text-[var(--primary)]" />{group.name}<span className="ml-1 rounded-full bg-[var(--surface-muted)] px-2 py-0.5 text-[0.75rem] font-normal text-[var(--text-muted)]">{group.labels.length}</span></button></td>
+                    </tr>
+                    {expanded ? group.labels.map((label) => {
+                      const rule = rulePoliciesByTag.get(label.name)
+                      const ruleCount = tagPolicies.filter((item) => item.tags.includes(label.name)).length
+                      return <tr key={label.id} className="border-b border-[var(--line)] bg-[var(--surface-raised)] align-top last:border-b-0 hover:bg-[var(--surface-muted)]"><td className="px-5 py-3.5"><div className="flex items-start gap-2"><span className="mt-2 h-px w-4 shrink-0 bg-[var(--line)]" /><div className="min-w-0"><div className="truncate font-medium text-[var(--text-main)]">{label.name}</div><div className="mt-1 truncate text-[0.75rem] text-[var(--text-muted)]">{label.code}</div></div></div></td><td className="px-4 py-3.5 text-[var(--text-secondary)]">{label.categoryPath}</td><td className="px-4 py-3.5"><span className={cn('inline-flex rounded-full border px-2.5 py-1 text-[0.75rem] font-medium', sensitivityTone(label.sensitivity))}>{label.sensitivity}</span></td><td className="px-4 py-3.5 text-[var(--text-secondary)]"><div>{label.resourceCount} 个数据资源</div><div className="mt-1 text-[0.75rem] text-[var(--text-muted)]">{label.categoryGroup === '自动补全标签' ? `${ruleCount} 条补全规则` : `${label.policyCount} 个安全策略`}</div></td><td className="max-w-[320px] px-4 py-3.5"><div className={cn('truncate', rule ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]')} title={ruleSummary(rule)}>{ruleSummary(rule)}</div>{rule ? <div className="mt-1 text-[0.75rem] text-[var(--text-muted)]">{rule.enabled ? '已启用' : '已停用'} · {rule.logic === 'and' ? '全部满足' : '任一满足'}</div> : null}</td><td className="px-4 py-3.5"><span className={cn('inline-flex rounded-full border px-2.5 py-1 text-[0.75rem] font-medium', statusTone(label.status))}>{label.status}</span></td><td className="px-4 py-3"><button type="button" title="编辑标签规则" className="rounded-[6px] p-2 text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] hover:text-[var(--primary)]" onClick={() => setEditingLabel(label)}><Edit3 className="h-4 w-4" /></button></td></tr>
+                    }) : null}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        {!loading && !groups.length ? <div className="px-5 py-12 text-center text-[0.875rem] text-[var(--text-muted)]">未找到符合条件的标签</div> : null}
+        {loading ? <div className="px-5 py-12 text-center text-[0.875rem] text-[var(--text-muted)]">正在读取标签和自动补全规则...</div> : null}
+      </section>
+      <LabelRuleDrawer label={editingLabel} policies={tagPolicies} onClose={() => setEditingLabel(null)} onSaved={refresh} />
+    </div>
   )
 }

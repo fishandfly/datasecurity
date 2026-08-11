@@ -1,133 +1,88 @@
-# 3.1 量测数据安全管控测试用例索引
+# 电网数据安全管控完整体测试用例
 
-> 适用版本：3.1 当前演示环境（2026-08-05 快照）
-> 技术要求依据：`docs/design v1.0/基于智能策略引擎的数据中台量测数据安全管控技术研究.md`（第七章技术要求）
-> 数据资料依据：`docs/data/` 客户两份资料及三篇解读
+## 1. 目的
 
-## 1. 阅读方式
+本目录将小样本配置验收与执行引擎新逻辑合并，按“配置 -> 发布 -> 鉴权 -> 标签补全 -> 分类分级 -> 动态策略 -> 安全动作 -> 审计记录”顺序验证完整链路。访问日志统一为“完整版日志”，只在数据资源详情页和日志中心呈现。
 
-每个测试用例在验收内容之前提供用户故事，说明实际使用者、业务诉求与预期价值；随后按前置条件、操作步骤、预期结果与通过标准逐步执行。建议按 README 的执行顺序运行，前序用例的产出是后序用例的前置。
+本套用例只使用当前小样本，不执行全量演示种子脚本。拒绝访问只保留完整版审计日志，不生成风险事件，也不验证通知、消息、工单或人工处置。
 
-## 2. 技术要求 → 用例映射
+## 2. 当前基线
 
-| 技术要求（技术研究文档） | 验证用例 |
+| 对象 | 数量/配置 |
 | --- | --- |
-| 研究内容 1：实时多维度智能策略引擎；统一数据接入规则；加密传输与接入完整性校验 | TC02 数据源接入、TC03 接入校验与完整性 |
-| 研究内容 2：数据接入分层防护（不同类型/敏感级别分层隔离）；多因素动态访问控制 | TC04 数据资源与客户口径、TC07 分层策略与访问控制、TC08 异常访问与风险处置 |
-| 研究内容 3：跨域密态计算方法（可用不可见）；安全接入/安全访问/密态计算组件；51 套应用数据支撑 | TC09 跨域密态计算、TC10 数据应用访问链路 |
-| 预期目标：统一数据入口、数据描述标签标注、轻量校验与加密传输 | TC02、TC03、TC04 |
-| 预期目标：规则/模型识别越权访问与非正常调用；自动化分层隔离引擎 | TC07、TC08 |
-| 预期目标：基于同态加密的跨域密态计算，量测数据可用不可见 | TC09 |
-| 组件应用：量测数据安全管控组件 1 套（安全接入/安全访问/密态计算） | TC02-TC10 全链路 |
-| 3.1 新增：实时监控页面（数据安全运行链路 + 三 tab 桑基图） | TC11 实时监控与桑基图交互 |
-| 3.1 新增：客户数据对齐与红线核查 | TC12 客户数据对齐与红线核查 |
-| 3.1 新增：流式处理引擎（轻量 Python 服务，不依赖 Kafka/Flink） | TC13 流式处理引擎 |
-| 环境基线可复现 | TC01 环境与数据基线 |
+| 数据源 | 1：`SRC-YC20-001` |
+| 数据资源 | 5：用户侧十五分钟负荷曲线、调度实时运行量测、低频电压曲线、日冻结电能示值、客户电能示值曲线 |
+| 防护层 | L1=1、L2=2、L3=2 |
+| API 记录 | 6（当前 5 条 `enabled/success`，1 条草稿保留） |
+| 访问主体 | 3：`APP-INTERNAL-A`、`APP-INTERNAL-B`、`APP-EXTERNAL-C` |
+| 访问策略 | 10 条启用策略 |
+| 分类标签 | 10 个 |
+| 字段安全档案 | 50 条 |
+| 同态能力 | BFV、CKKS；密钥仅保存 Secret 引用 |
 
-## 3. 执行顺序
+L1 区域负荷 API 使用 `/internal/region-hourly` 受控聚合执行通道，不能使用未执行安全动作的直连转发。
 
-| 用例 | 验证边界 | 关键产出 |
-| --- | --- | --- |
-| TC01 | 环境与 3.1 数据基线（10 源/16 资源/21 主体/20 API/16 密钥） | 基线计数与 seed→migrate 复现 |
-| TC02 | 数据源接入（10 类源、4 通道、Secret 引用、连接检查） | 已保存数据源、真实连接状态与接入日志 |
-| TC03 | 接入校验与完整性（量测项规则、未关联容错、接入日志） | 资源级校验规则与真实接入批次 |
-| TC04 | 数据资源登记与客户口径（16 资源、字段、分类树、申请热度） | 客户对齐资源档案与分类挂接 |
-| TC05 | 数据服务与 API（唯一默认 API、发布上下线、量测档案） | 14 个已发布 API、draft 占位 API |
-| TC06 | 鉴权与主体授权（API Key/HMAC、主体状态、授权清单） | 21 主体鉴权与授权闭环 |
-| TC07 | 分层策略与访问控制（l1/l2/l3、标签组合、多因素条件） | 防护层命中、多因素拒绝/放行 |
-| TC08 | 异常访问与风险处置（范围/频率/时段/行数、风险事件） | 异常决策日志与风险事件闭环 |
-| TC09 | 跨域密态计算（BFV/CKKS、任务、结果校验、明文不落库） | 密态任务完成、验证通过、无明文负载 |
-| TC10 | 数据应用访问链路（21 应用/7 专业、真实调用日志） | 应用调用日志与输出模式分布 |
-| TC11 | 实时监控与桑基图交互（三 tab、节点跳转、连线明细） | 首页链路与桑基图交互证据 |
-| TC12 | 客户数据对齐与红线核查（命名、分类、热度、不暴露真实信息） | 命名/分类/热度核对表与红线扫描结果 |
-| TC13 | 流式处理引擎（事件源、窗口聚合、异常检测、批次日志、日志跟踪、桑基图流式接入、客户数据连接） | 流式窗口/批次证据、日志展开明细与桑基图流式链路 |
+## 3. 环境与安全约定
 
-## 4. 环境约定
-
-| 项目 | 值 |
-| --- | --- |
-| 管理前端 | `http://localhost:5173/data-catalog/` |
-| 管理后端（NocoBase） | `http://127.0.0.1:8196` |
-| Python 安全运行服务 | `http://127.0.0.1:8090` |
-| 同态加密计算服务 | `http://127.0.0.1:8088` |
-| 物理演示库 | Postgres `measurement_data`（容器 `postgres`，网络别名 `measurement-db`，schema `measurement_demo`，只读角色 `measurement_reader`） |
-| 登录账号 | `nocobase` / `admin123` |
-| 初始化脚本 | `scripts/seed-nocobase-demo.mjs` → `scripts/migrate-nocobase-v3.mjs`（**seed → migrate**） |
-| 调用脚本 | `scripts/call-v3-data-api.mjs`（单次调用）、`scripts/generate-customer-calls.mjs`（批量演示调用） |
-| API Key / 密钥 | 明文不写入测试文档、命令历史、页面或数据库；演示主体密钥见 `docker/.env` 的 `SUBJECT_DEMO_SECRET` |
-
-## 5. 3.1 当前数据基线
-
-演示数据由 `seed → migrate` 初始化，当前实测基线（2026-08-05）：
-
-| 数据对象 | 数量 | 说明 |
-| --- | ---: | --- |
-| 数据源 | 10 | 用采 2.0、调控云、配电自动化、调度自动化、新一代集控站、电能量计量、配电云主站、输变电状态监测、网格化气象预测、高压电缆在线监测；接入通道覆盖 数据库直连 / 已有 API / E 文件 / 消息服务 |
-| 数据资源 | 16 | 2 个验收资源 + 14 个客户对齐资源；`protection_level` 覆盖 l1（仅聚合）/ l2（明细受控）/ l3（仅密态） |
-| 数据应用（访问主体） | 21 | 3 个验收主体 + 18 个客户应用，覆盖营销/数字化/设备/发展/安监/纪委/审计 7 专业 |
-| API 资源 | 20 | 3 个验收 API + 14 个默认查询 API（10 个已发布、4 个档案占位 draft）+ 2 个路径占位 + 1 个历史资源 API；已发布 14 |
-| 访问策略 | 83 | 16 条资源安全档案 + 客户访问策略；启用并发布 62 |
-| 同态密钥 | 16 | BFV/CKKS 各一当前版本，覆盖 3 基线主体 + 7 个密态客户主体 |
-| 决策日志 | 566 | allow 472 / deny 94（基线口径）；客户应用真实调用由 `generate-customer-calls.mjs` 生成 |
-| 风险事件 | 73 | 来自真实拒绝决策（risk_score ≥ 70） |
-| 同态任务 | 92 | 含 42 个真实完成密态计算任务（openfhe 结果回传） |
-| 接入日志 | 483 | 数据源连接检查与批量接入校验批次 |
-
-基线核对命令：
+前端使用本机 Vite：`http://localhost:5173/data-catalog/`。后端使用 Docker 的 `security-runtime`、`postgres`、`openfhe` 服务，地址分别为 `http://127.0.0.1:8090`、数据库容器、`http://127.0.0.1:8088`。
 
 ```bash
-docker exec nocobase-8196-postgres-1 psql -U nocobase -d nocobase -t -c \
-  "SELECT 'sources', count(*) FROM security_data_sources WHERE connection_status <> 'disabled' \
-   UNION ALL SELECT 'resources', count(*) FROM eco_data_resources WHERE resource_status <> 'disabled' \
-   UNION ALL SELECT 'subjects', count(*) FROM security_access_subjects WHERE subject_status='enabled' \
-   UNION ALL SELECT 'apis', count(*) FROM security_api_resources \
-   UNION ALL SELECT 'policies', count(*) FROM eco_resource_security_policies \
-   UNION ALL SELECT 'keys', count(*) FROM security_crypto_keys WHERE key_status='enabled'"
+set -a
+. docker/.env
+set +a
+docker compose --env-file docker/.env -f docker/docker-compose.yml ps
+curl -fsS http://127.0.0.1:8090/health
+curl -fsS http://127.0.0.1:8088/health
 ```
 
-## 6. 鉴权与策略定位原则
+通用 HMAC 调用，不要输出或保存密钥：
 
-```text
-API 路由
-  -> 主体鉴权（API Key 或 HMAC 签名）
-  -> 主体状态/有效期/IP 白名单
-  -> 主体 API 授权清单
-  -> 已发布访问策略（scenario + subject + api 精确匹配）
-  -> 资源防护层 / 标签硬约束
-  -> 异常访问与风险判断（时段/频率/范围/行数）
-  -> 数据访问（明细/脱敏/聚合/密态）
-  -> 决策日志 + 风险事件
+```bash
+SUBJECT_SECRET="$SUBJECT_INTERNAL_A_SECRET" API_AUTH_MODE=hmac \
+node scripts/call-v3-data-api.mjs '<请求 URL>' APP-INTERNAL-A '<场景>'
 ```
 
-数据资源与 API 配置关系固定为：
+代表请求（密钥只从环境变量读取）：
 
-```text
-数据资源（数据源 + 基准物理表 + 字段定义 + 量测档案）
-  -> 自动形成唯一 GET 查询 API（API-{资源编码}）
-  -> 管理员仅执行发布/下线，不重复录入路径、字段与参数
-```
-
-访问策略配置关系固定为：
-
-```text
-资源分类/分级/防护层/资源标签/字段标签
-  -> 标签组合策略（默认，可覆盖多个资源）
-  -> 更具体的标签组合策略（priority + 条件具体度）
-  -> 单资源/API 例外策略（最高优先级）
-```
-
-当用例失败时，根据原因编码定位到具体阶段，不得将 API Key 错误、API 未授权或无匹配策略统一记为"访问策略失败"：
-
-| 原因编码 | 阶段 | 含义 |
+| 输出 | URL | 主体/场景 |
 | --- | --- | --- |
-| `API_KEY_INVALID` / `SIGNATURE_INVALID` | 主体鉴权 | 密钥或签名错误 |
-| `SUBJECT_DISABLED` / `POLICY_EXPIRED` | 主体状态 | 主体停用或凭据过期 |
-| `IP_NOT_ALLOWED` | 网络条件 | 来源 IP 不在白名单 |
-| `API_NOT_AUTHORIZED` | 授权清单 | 主体未获该 API 授权 |
-| `POLICY_NOT_FOUND` | 策略匹配 | 无匹配的已发布访问策略或输出路径不支持 |
-| `QUERY_RANGE_EXCEEDED` / `ROW_LIMIT_EXCEEDED` | 风险判断 | 查询范围/行数超限 |
-| `HOMOMORPHIC_*` | 密态计算 | 密态参数、密钥、样本或引擎异常 |
+| 明细 | `/data-api/internal/active-power?regionCode=REGION-A&startAt=2026-07-01T00%3A00%3A00%2B08%3A00&endAt=2026-07-01T01%3A00%3A00%2B08%3A00` | `APP-INTERNAL-A / dispatch-operation-analysis` |
+| 脱敏 | `/data-api/resources/grid-lvf-volt-001?pageSize=3` | `APP-INTERNAL-A / online-grid-lvf-voltage` |
+| 聚合 | `/data-api/direct/region-load?regionCode=REGION-A&startAt=2026-07-01T00%3A00%3A00%2B08%3A00&endAt=2026-07-01T04%3A00%3A00%2B08%3A00` | `APP-INTERNAL-A / region-load-query` |
+| BFV | `/data-api/resources/cust-daily-energy-003?operation=sum&fieldCode=PAP_R&regionCode=REGION-A&startAt=2026-06-25T00%3A00%3A00%2B08%3A00&endAt=2026-06-26T00%3A00%3A00%2B08%3A00` | `APP-INTERNAL-B / marketing-2-daily-energy` |
+| CKKS | `/data-api/resources/cust-power-curve-005?operation=mean&fieldCode=VALUE&regionCode=REGION-A&startAt=2026-07-01T08%3A00%3A00%2B08%3A00&endAt=2026-07-01T09%3A00%3A00%2B08%3A00` | `APP-INTERNAL-B / marketing-2-energy-curve` |
+| 跨域 BFV | `/data-api/resources/cust-daily-energy-003?operation=sum&fieldCode=PAP_R&regionCode=REGION-A&startAt=2026-06-25T00%3A00%3A00%2B08%3A00&endAt=2026-06-26T00%3A00%3A00%2B08%3A00` | `APP-EXTERNAL-C / cross-domain-encrypted` |
 
-## 7. 执行记录
+调用后将响应中的 `requestId` 代入审计 SQL，不在证据中保存 HMAC 输出中的敏感请求头。
 
-执行结果与证据归档在 `验收证据/`（每执行一轮补充一份 `NN-执行结果.md` 与原始命令/响应文件）。
+状态变更用例必须记录原值、在用例结束前恢复。禁止执行 `seed-nocobase-demo.mjs`、`migrate-nocobase-v3.mjs`、`generate-customer-calls.mjs`，禁止将密码、Token、签名、数据库导出或明文数值写入证据。
+
+## 4. 审计判定
+
+每次请求必须在 `security_policy_decision_logs` 留一条记录。`applied_limits_json` 顶层必须包含：`labelEnrichment`、`classification`、`dynamicPolicy`、`securityActions`、`hardConstraints` 和 `runtimeTrace`。`runtimeTrace` 固定按 `label_enrichment -> classification -> dynamic_policy -> security_action -> audit_record` 排列；同时 `security-runtime` 容器输出一条同 `requestId` 的 `security_api_access` 结构化日志。
+
+完整版日志必须同时提供：标签补全后的完整标签与字段标签、候选策略逐条的通过/未命中/不通过结果及原因、数据源 -> 数据资源 -> 数据应用 -> API -> 输出路径的访问链路。标签展示按“分类组 -> 标签项”嵌套缩进，分类组为父级、每个标签为子级，并用层级线区分，避免把不同分类混成一行。日志中心支持按数据源、数据应用、数据资源查询；历史连接日志、策略日志、流式运行日志和同态任务日志仅保留作历史兼容数据，不再单独汇总到日志中心。旧的接入日志、调用与决策日志、同态日志入口统一重定向到完整版日志中心；资源详情只保留访问策略完整版日志。
+
+任何拒绝均只写一条包含完整证据的决策日志；不创建 `security_risk_events`，不要求通知或人工处置。
+
+## 5. 用例清单
+
+| 编号 | 用例 | 覆盖范围 |
+| --- | --- | --- |
+| CT01 | 环境、服务与小样本基线 | 容器、健康、1/5/5/3/10/10（API 总记录 6） |
+| CT02 | 数据源配置与 Secret 引用 | 数据源连接、密码不落库 |
+| CT03 | 资源、字段与分类标签配置 | 字段档案、L1/L2/L3、10 标签 |
+| CT04 | API 路由与运行时配置 | 发布状态、字段映射、执行路径 |
+| CT05 | 主体鉴权与动态策略配置 | HMAC、主体/API/场景、时间区域行数规则 |
+| CT06 | 标签补全与分类分级执行 | 实时快照、硬约束、自动隔离 |
+| CT07 | 动态策略多因素拒绝 | 场景、时间、区域、行数、行为 |
+| CT08 | 安全动作真实输出 | detail、masked、aggregate、BFV、CKKS |
+| CT09 | 不可执行受控路由阻断 | 直连隔离、禁止原样转发 |
+| CT10 | 审计日志完整性 | 日志证据与拒绝原因 |
+| CT11 | 监控、日志中心与流式空态 | 页面可观测性、空数据降级 |
+| CT12 | 安全红线与交付回归 | 密钥/明文/真实表名扫描、自动化回归 |
+| CT13 | API 运行时统一管控日志 | 五阶段轨迹、结构化服务日志、前端可见性 |
+
+## 6. 推荐执行顺序
+
+严格按 `CT01 -> CT13` 执行；CT07、CT09、CT10、CT13 会产生拒绝审计日志，不要清理，它们是验收证据。密态调用必须串行执行。

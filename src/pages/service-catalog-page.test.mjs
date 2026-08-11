@@ -21,8 +21,7 @@ test('数据源与数据API服务目录保留源码兼容路由，但顶部导�
   assert.match(sharingGovernanceRoutesSource, /<Route path="\/service-catalog" element={<ServiceCatalogPage \/>} \/>/)
   assert.match(serviceLayoutSource, /primaryNavigations\.map\(\(item\) => \(/)
   assert.doesNotMatch(navigationSource, /title: '数据API服务'[\s\S]*target: '\/service-catalog'/)
-  assert.match(navigationSource, /title: '安全态势看板'[\s\S]*target: '\/security-governance\/dashboard'/)
-  assert.doesNotMatch(navigationSource, /title: '数据安全管控'[\s\S]*target: '\/security-governance\/dashboard'/)
+  assert.match(navigationSource, /title: '安全态势'[\s\S]*target: '\/security-governance\/dashboard'/)
   assert.match(dataSourceCatalogPageSource, /return <CatalogPage forceView="data-source" \/>/)
 })
 
@@ -43,8 +42,8 @@ test('数据API服务页面默认只展示数据API目录，并兼容旧场景�
   assert.match(applicationSectionSource, /新建场景应用/)
 })
 
-test('数据API服务入口从首页和预览页指向独立服务清单页面', () => {
-  assert.match(homePageSource, /title: '数据API服务'[\s\S]*?to: '\/service-catalog'/)
+test('首页不重复维护数据API服务快捷入口，预览页保留兼容入口', () => {
+  assert.doesNotMatch(homePageSource, /title: '数据API服务'[\s\S]*?to: '\/service-catalog'/)
   assert.match(homePreviewShellSource, /title: '数据API服务'[\s\S]*?to: '\/service-catalog'/)
 })
 

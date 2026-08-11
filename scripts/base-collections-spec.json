@@ -65,17 +65,6 @@
         "defaultValue": "unconnected"
       },
       {
-        "name": "sensitivity_level",
-        "type": "string",
-        "interface": "select",
-        "description": "记录敏感等级，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "敏感等级",
-          "type": "string",
-          "x-component": "Select"
-        }
-      },
-      {
         "name": "owner_user",
         "type": "belongsTo",
         "interface": "m2o",
@@ -106,28 +95,6 @@
           "title": "责任部门",
           "type": "string",
           "x-component": "Input"
-        }
-      },
-      {
-        "name": "policy",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录关联安全档案，用于配置、查询、关联、筛选和审计。",
-        "title": "关联安全档案",
-        "target": "eco_resource_security_policies",
-        "foreignKey": "policy_id",
-        "targetKey": "id",
-        "targetTitleField": "policy_name",
-        "uiSchema": {
-          "type": "object",
-          "title": "关联安全档案",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "policy_name",
-              "value": "id"
-            }
-          }
         }
       },
       {
@@ -209,17 +176,6 @@
         "defaultValue": {}
       },
       {
-        "name": "workflow_key",
-        "type": "string",
-        "interface": "input",
-        "description": "记录接入 Workflow，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "接入 Workflow",
-          "type": "string",
-          "x-component": "Input"
-        }
-      },
-      {
         "name": "last_checked_at",
         "type": "date",
         "interface": "datetime",
@@ -241,72 +197,6 @@
           "x-component": "Input.JSON"
         },
         "defaultValue": {}
-      },
-      {
-        "name": "source_type_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录数据源类型字典，用于配置、查询、关联、筛选和审计。",
-        "title": "数据源类型字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "source_type_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "数据源类型字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "connection_status_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录连接状态字典，用于配置、查询、关联、筛选和审计。",
-        "title": "连接状态字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "connection_status_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "连接状态字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "sensitivity_level_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录敏感等级字典，用于配置、查询、关联、筛选和审计。",
-        "title": "敏感等级字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "sensitivity_level_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "敏感等级字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
       },
       {
         "name": "source_tags",
@@ -983,29 +873,6 @@
     },
     "fields": [
       {
-        "name": "policy",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录资源安全档案，用于配置、查询、关联、筛选和审计。",
-        "title": "资源安全档案",
-        "target": "eco_resource_security_policies",
-        "foreignKey": "policy_id",
-        "targetKey": "id",
-        "targetTitleField": "policy_name",
-        "uiSchema": {
-          "type": "object",
-          "title": "资源安全档案",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "policy_name",
-              "value": "id"
-            }
-          }
-        },
-        "allowNull": false
-      },
-      {
         "name": "resource",
         "type": "belongsTo",
         "interface": "m2o",
@@ -1121,43 +988,6 @@
         }
       },
       {
-        "name": "sensitivity_type",
-        "type": "string",
-        "interface": "input",
-        "description": "记录敏感类型，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "敏感类型",
-          "type": "string",
-          "x-component": "Input"
-        }
-      },
-      {
-        "name": "identifier_flag",
-        "type": "boolean",
-        "interface": "checkbox",
-        "description": "记录直接标识符，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "直接标识符",
-          "type": "boolean",
-          "x-component": "Checkbox"
-        },
-        "allowNull": false,
-        "defaultValue": false
-      },
-      {
-        "name": "quasi_identifier_flag",
-        "type": "boolean",
-        "interface": "checkbox",
-        "description": "记录准标识符，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "准标识符",
-          "type": "boolean",
-          "x-component": "Checkbox"
-        },
-        "allowNull": false,
-        "defaultValue": false
-      },
-      {
         "name": "important_field_flag",
         "type": "boolean",
         "interface": "checkbox",
@@ -1171,39 +1001,6 @@
         "defaultValue": false
       },
       {
-        "name": "level_basis",
-        "type": "text",
-        "interface": "textarea",
-        "description": "记录定级依据，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "定级依据",
-          "type": "string",
-          "x-component": "Input.TextArea"
-        }
-      },
-      {
-        "name": "risk_notes",
-        "type": "text",
-        "interface": "textarea",
-        "description": "记录字段风险说明，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "字段风险说明",
-          "type": "string",
-          "x-component": "Input.TextArea"
-        }
-      },
-      {
-        "name": "required_access_scope",
-        "type": "string",
-        "interface": "select",
-        "description": "记录字段访问范围，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "字段访问范围",
-          "type": "string",
-          "x-component": "Select"
-        }
-      },
-      {
         "name": "required_desensitization",
         "type": "boolean",
         "interface": "checkbox",
@@ -1215,221 +1012,6 @@
         },
         "allowNull": false,
         "defaultValue": false
-      },
-      {
-        "name": "required_desensitization_mode",
-        "type": "string",
-        "interface": "select",
-        "description": "记录字段脱敏方式，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "字段脱敏方式",
-          "type": "string",
-          "x-component": "Select"
-        }
-      },
-      {
-        "name": "required_export_allowed",
-        "type": "boolean",
-        "interface": "checkbox",
-        "description": "记录字段允许导出，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "字段允许导出",
-          "type": "boolean",
-          "x-component": "Checkbox"
-        },
-        "allowNull": false,
-        "defaultValue": false
-      },
-      {
-        "name": "required_export_scope",
-        "type": "string",
-        "interface": "select",
-        "description": "记录字段导出范围，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "字段导出范围",
-          "type": "string",
-          "x-component": "Select"
-        }
-      },
-      {
-        "name": "required_api_access_allowed",
-        "type": "boolean",
-        "interface": "checkbox",
-        "description": "记录字段允许 API 返回，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "字段允许 API 返回",
-          "type": "boolean",
-          "x-component": "Checkbox"
-        },
-        "allowNull": false,
-        "defaultValue": false
-      },
-      {
-        "name": "required_approval_required",
-        "type": "boolean",
-        "interface": "checkbox",
-        "description": "记录字段需要审批，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "字段需要审批",
-          "type": "boolean",
-          "x-component": "Checkbox"
-        },
-        "allowNull": false,
-        "defaultValue": false
-      },
-      {
-        "name": "information_category_node",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录信息分类节点，用于配置、查询、关联、筛选和审计。",
-        "title": "信息分类节点",
-        "target": "jcCategoryTreeNodes",
-        "foreignKey": "information_category_id",
-        "targetKey": "id",
-        "targetTitleField": "nodeName",
-        "uiSchema": {
-          "type": "object",
-          "title": "信息分类节点",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "nodeName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "classification_level_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录分类层级字典，用于配置、查询、关联、筛选和审计。",
-        "title": "分类层级字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "classification_level_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "分类层级字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "security_level_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录字段安全等级字典，用于配置、查询、关联、筛选和审计。",
-        "title": "字段安全等级字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "field_security_level_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "字段安全等级字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "sensitivity_type_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录敏感类型字典，用于配置、查询、关联、筛选和审计。",
-        "title": "敏感类型字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "sensitivity_type_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "敏感类型字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "required_access_scope_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录字段访问范围字典，用于配置、查询、关联、筛选和审计。",
-        "title": "字段访问范围字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "required_access_scope_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "字段访问范围字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "required_desensitization_mode_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录字段脱敏方式字典，用于配置、查询、关联、筛选和审计。",
-        "title": "字段脱敏方式字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "required_desensitization_mode_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "字段脱敏方式字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "required_export_scope_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录字段导出范围字典，用于配置、查询、关联、筛选和审计。",
-        "title": "字段导出范围字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "required_export_scope_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "字段导出范围字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
       },
       {
         "name": "field_tags",
@@ -1462,19 +1044,6 @@
         "uiSchema": {
           "type": "boolean",
           "title": "允许输出",
-          "x-component": "Checkbox"
-        },
-        "allowNull": false,
-        "defaultValue": true
-      },
-      {
-        "name": "aggregation_allowed",
-        "type": "boolean",
-        "interface": "checkbox",
-        "description": "记录允许聚合，用于功能能力和安全边界控制。",
-        "uiSchema": {
-          "type": "boolean",
-          "title": "允许聚合",
           "x-component": "Checkbox"
         },
         "allowNull": false,
@@ -1645,30 +1214,6 @@
         },
         "allowNull": false,
         "defaultValue": "draft"
-      },
-      {
-        "name": "credential_version",
-        "type": "integer",
-        "interface": "integer",
-        "description": "记录凭据版本，用于数量限制、运行统计和审计。",
-        "uiSchema": {
-          "type": "number",
-          "title": "凭据版本",
-          "x-component": "InputNumber"
-        },
-        "allowNull": false,
-        "defaultValue": 1
-      },
-      {
-        "name": "description",
-        "type": "text",
-        "interface": "textarea",
-        "description": "记录主体说明，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "type": "string",
-          "title": "主体说明",
-          "x-component": "Input.TextArea"
-        }
       },
       {
         "name": "allowed_api_codes_json",
@@ -2571,88 +2116,6 @@
         "defaultValue": "draft"
       },
       {
-        "name": "access_scope",
-        "type": "string",
-        "interface": "select",
-        "description": "记录访问范围，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "访问范围",
-          "type": "string",
-          "x-component": "Select"
-        }
-      },
-      {
-        "name": "approval_mode",
-        "type": "string",
-        "interface": "select",
-        "description": "记录审批模式，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "审批模式",
-          "type": "string",
-          "x-component": "Select"
-        }
-      },
-      {
-        "name": "desensitization_mode",
-        "type": "string",
-        "interface": "select",
-        "description": "记录脱敏方式，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "脱敏方式",
-          "type": "string",
-          "x-component": "Select"
-        }
-      },
-      {
-        "name": "export_allowed",
-        "type": "boolean",
-        "interface": "checkbox",
-        "description": "记录允许导出，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "允许导出",
-          "type": "boolean",
-          "x-component": "Checkbox"
-        },
-        "allowNull": false,
-        "defaultValue": false
-      },
-      {
-        "name": "export_scope",
-        "type": "string",
-        "interface": "select",
-        "description": "记录导出范围，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "导出范围",
-          "type": "string",
-          "x-component": "Select"
-        },
-        "defaultValue": "disabled"
-      },
-      {
-        "name": "api_access_allowed",
-        "type": "boolean",
-        "interface": "checkbox",
-        "description": "记录允许 API 访问，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "允许 API 访问",
-          "type": "boolean",
-          "x-component": "Checkbox"
-        },
-        "allowNull": false,
-        "defaultValue": false
-      },
-      {
-        "name": "api_auth_mode",
-        "type": "string",
-        "interface": "select",
-        "description": "记录API 鉴权方式，用于配置、查询、关联、筛选和审计。",
-        "uiSchema": {
-          "title": "API 鉴权方式",
-          "type": "string",
-          "x-component": "Select"
-        }
-      },
-      {
         "name": "effective_from",
         "type": "dateOnly",
         "interface": "dateOnly",
@@ -2707,204 +2170,6 @@
           "title": "备注",
           "type": "string",
           "x-component": "Input.TextArea"
-        }
-      },
-      {
-        "name": "security_profile_status_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录档案状态字典，用于配置、查询、关联、筛选和审计。",
-        "title": "档案状态字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "security_profile_status_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "档案状态字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "security_review_status_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录复核状态字典，用于配置、查询、关联、筛选和审计。",
-        "title": "复核状态字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "security_review_status_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "复核状态字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "share_scope_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录共享范围字典，用于配置、查询、关联、筛选和审计。",
-        "title": "共享范围字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "share_scope_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "共享范围字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "policy_status_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录策略状态字典，用于配置、查询、关联、筛选和审计。",
-        "title": "策略状态字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "policy_status_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "策略状态字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "access_scope_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录访问范围字典，用于配置、查询、关联、筛选和审计。",
-        "title": "访问范围字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "access_scope_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "访问范围字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "approval_mode_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录审批模式字典，用于配置、查询、关联、筛选和审计。",
-        "title": "审批模式字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "approval_mode_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "审批模式字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "desensitization_mode_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录脱敏方式字典，用于配置、查询、关联、筛选和审计。",
-        "title": "脱敏方式字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "desensitization_mode_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "脱敏方式字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "export_scope_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录导出范围字典，用于配置、查询、关联、筛选和审计。",
-        "title": "导出范围字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "export_scope_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "导出范围字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
-        }
-      },
-      {
-        "name": "api_auth_mode_dict",
-        "type": "belongsTo",
-        "interface": "m2o",
-        "description": "记录API 鉴权方式字典，用于配置、查询、关联、筛选和审计。",
-        "title": "API 鉴权方式字典",
-        "target": "jcDictionaryItems",
-        "foreignKey": "api_auth_mode_id",
-        "targetKey": "id",
-        "targetTitleField": "dictValueName",
-        "uiSchema": {
-          "type": "object",
-          "title": "API 鉴权方式字典",
-          "x-component": "AssociationField",
-          "x-component-props": {
-            "fieldNames": {
-              "label": "dictValueName",
-              "value": "id"
-            }
-          }
         }
       },
       {
@@ -3044,17 +2309,6 @@
         "uiSchema": {
           "type": "object",
           "title": "区域范围",
-          "x-component": "Input.JSON"
-        }
-      },
-      {
-        "name": "field_allowlist_json",
-        "type": "jsonb",
-        "interface": "json",
-        "description": "记录字段白名单，用于保存不含 Secret 和明文数据的结构化扩展信息。",
-        "uiSchema": {
-          "type": "object",
-          "title": "字段白名单",
           "x-component": "Input.JSON"
         }
       },

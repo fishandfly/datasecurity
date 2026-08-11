@@ -1,7 +1,6 @@
 import {
   Activity,
   AlertCircle,
-  Bell,
   CheckCircle2,
   Cpu,
   DatabaseZap,
@@ -231,7 +230,7 @@ function SecurityDataFlow({ metrics, coreMetrics }: { metrics: SecurityDashboard
     { x: 575, y: 280, width: 190, height: 64, title: '安全策略', value: `${metrics.activePolicies} 条关联`, tone: 'amber' },
     { x: 865, y: 80, width: 190, height: 64, title: '同态加密', value: `${metrics.homomorphicTaskCount} 个任务`, tone: 'violet' },
     { x: 865, y: 180, width: 190, height: 64, title: '访问策略', value: `${metrics.activePolicies} 条启用`, tone: 'amber' },
-    { x: 865, y: 280, width: 190, height: 64, title: '风险事件', value: `${metricValue('risks')} 项事件`, tone: 'red' },
+    { x: 865, y: 280, width: 190, height: 64, title: '访问日志', value: `${metricValue('rejects')} 次拒绝`, tone: 'red' },
     { x: 1195, y: 70, width: 190, height: 52, title: '跨域访问应用', value: '密态计算场景', tone: 'violet' },
     { x: 1195, y: 150, width: 190, height: 52, title: '网上电网', value: '内部应用', tone: 'violet' },
     { x: 1195, y: 230, width: 190, height: 52, title: '数智吉电', value: '内部应用', tone: 'violet' },
@@ -247,7 +246,7 @@ function SecurityDataFlow({ metrics, coreMetrics }: { metrics: SecurityDashboard
     { id: 'flow-archive-homomorphic', d: 'M765 212 C815 212 815 112 865 112', delay: '-1.5s' },
     { id: 'flow-policy-access', d: 'M765 312 C815 312 815 212 865 212', delay: '-1.65s' },
     { id: 'flow-homomorphic-access', d: 'M960 144 V180', delay: '-1.75s' },
-    { id: 'flow-access-risk', d: 'M960 244 V280', delay: '-2s' },
+    { id: 'flow-access-audit', d: 'M960 244 V280', delay: '-2s' },
     { id: 'flow-homomorphic-cross-domain', d: 'M1055 112 C1115 112 1130 96 1195 96', delay: '-2.25s' },
     { id: 'flow-access-online-grid', d: 'M1055 212 C1115 212 1130 176 1195 176', delay: '-2.5s' },
     { id: 'flow-access-digital-jilin', d: 'M1055 212 C1115 212 1130 256 1195 256', delay: '-2.75s' },
@@ -354,7 +353,7 @@ export function SecurityDashboardPage() {
 
   const coreMetricIcons: Record<SecurityDashboardCoreMetric['key'], React.ReactNode> = {
     resources: <Workflow className="h-5 w-5" />, apis: <DatabaseZap className="h-5 w-5" />, policies: <SlidersHorizontal className="h-5 w-5" />,
-    requests: <Activity className="h-5 w-5" />, rejects: <ShieldAlert className="h-5 w-5" />, risks: <Bell className="h-5 w-5" />, tasks: <LockKeyhole className="h-5 w-5" />,
+    requests: <Activity className="h-5 w-5" />, rejects: <ShieldAlert className="h-5 w-5" />, tasks: <LockKeyhole className="h-5 w-5" />,
   }
 
   return (
@@ -432,7 +431,7 @@ export function SecurityDashboardPage() {
                     <div key={`${event.time}-${event.description}`} className="security-dashboard-event-row grid gap-3 rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-3 lg:grid-cols-[88px_128px_minmax(0,1fr)_112px_80px] lg:items-center">
                       <div className="text-[0.8125rem] font-medium text-[var(--text-main)]">{event.time}</div>
                       <div className="flex items-center gap-2 text-[0.8125rem] text-[var(--text-secondary)]">
-                        <Bell className="h-4 w-4 text-[var(--primary)]" />
+                        <Activity className="h-4 w-4 text-[var(--primary)]" />
                         {event.type}
                       </div>
                       <div className="min-w-0 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">{event.description}</div>

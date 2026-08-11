@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -19,14 +20,16 @@ from .runtime import (
     execute_data_api,
     publish_api,
     publish_policy,
-    ensure_behavior_baseline_unique_index,
-    upsert_behavior_baseline,
     ensure_resource_api,
     preview_resource_latest_rows,
     unpublish_api,
     record_allowed,
     record_denied,
-    record_runtime_engine_exception,
+    risk_level,
+    runtime_security_snapshot,
+    runtime_access_path,
+    policy_evaluations,
+    runtime_trace,
     runtime_summary,
 )
 from .streaming import streaming_config, streaming_engine_loop
@@ -41,14 +44,105 @@ app = FastAPI(
     redoc_url=None,
 )
 
+runtime_logger = logging.getLogger("security-runtime.api")
+runtime_logger.setLevel(logging.INFO)
+if not runtime_logger.handlers:
+    runtime_logger.addHandler(logging.StreamHandler())
+runtime_logger.propagate = False
+
+
+def _log_runtime_access(
+    *,
+    decision: str,
+    status: int,
+    duration_ms: int,
+    context=None,
+    error: RuntimeDenied | None = None,
+) -> None:
+    """Emit one structured, secret-free access trace for container/service logs."""
+    policy = context.policy if context else (error.policy if error else None)
+    api = context.api if context else (error.api if error else None)
+    subject = context.subject if context else (error.subject if error else None)
+    snapshot = (
+        context.security_snapshot
+        if context
+        else (error.security_snapshot if error else {})
+    )
+    if not snapshot:
+        try:
+            snapshot = runtime_security_snapshot(policy or {}, api or {})
+        except Exception:
+            snapshot = {}
+    matched_labels = context.matched_labels if context else (error.matched_labels if error else ())
+    actions = context.security_actions if context else (error.security_actions if error else ("DENY", "AUDIT"))
+    risk_score = context.risk_score if context else (error.risk_score if error else 0)
+    reason_code = "POLICY_ALLOW" if decision == "allow" else (error.code if error else "")
+    event = {
+        "event": "security_api_access",
+        "requestId": context.request_id if context else (error.request_id if error else ""),
+        "decision": decision,
+        "responseStatus": status,
+        "durationMs": max(0, duration_ms),
+        "api": {"id": api.get("id"), "code": api.get("api_code")} if api else None,
+        "subject": {"id": subject.get("id"), "code": subject.get("subject_code")} if subject else None,
+        "policy": {"id": policy.get("id"), "code": policy.get("policy_code"), "version": policy.get("policy_version")} if policy else None,
+        "outputMode": policy.get("output_mode") if policy else None,
+        "riskScore": risk_score,
+        "riskLevel": context.level if context else risk_level(risk_score),
+        "accessPath": runtime_access_path(api or {}, subject or {}, policy or {}),
+        "policyEvaluations": policy_evaluations(
+            policy or {},
+            context.risk_factors if context else (error.risk_factors if error else ()),
+            decision,
+            reason_code,
+        ),
+        "runtimeTrace": runtime_trace(
+            policy=policy,
+            snapshot=snapshot,
+            matched_labels=matched_labels,
+            actions=actions,
+            risk_factors=context.risk_factors if context else (error.risk_factors if error else ()),
+            decision=decision,
+            risk_score=risk_score,
+            reason_code=reason_code,
+        ),
+    }
+    runtime_logger.info("%s", json.dumps(event, ensure_ascii=False, sort_keys=True))
+
+
+def _safe_log_runtime_access(**kwargs) -> None:
+    try:
+        _log_runtime_access(**kwargs)
+    except Exception:
+        # Logging must never change the API decision or response.
+        runtime_logger.exception("security_api_access logging failed")
+
+
+def _denied_after_context(code: str, context, request_id: str) -> RuntimeDenied:
+    values = {
+        "request_id": request_id,
+        "api": context.api if context else None,
+        "subject": context.subject if context else None,
+        "policy": context.policy if context else None,
+        "client_ip": context.client_ip if context else "gateway",
+        "query_days": context.query_days if context else 0,
+        "requested_rows": context.requested_rows if context else 0,
+    }
+    if context:
+        values.update(
+            {
+                "matched_labels": context.matched_labels,
+                "risk_factors": context.risk_factors,
+                "label_snapshot_version": context.label_snapshot_version,
+                "security_actions": (*context.security_actions, "DENY"),
+                "security_snapshot": context.security_snapshot,
+            }
+        )
+    return RuntimeDenied(code, **values)
+
 
 @app.on_event("startup")
 def ensure_runtime_constraints() -> None:
-    try:
-        ensure_behavior_baseline_unique_index()
-    except Exception:
-        # 首次安装时管理表可能尚未创建，保存基线时会再次执行并返回明确错误。
-        pass
     try:
         if streaming_config().get("enabled") is not False:
             thread = threading.Thread(target=streaming_engine_loop, name="streaming-engine", daemon=True)
@@ -100,7 +194,7 @@ async def health() -> dict[str, Any]:
         summary = runtime_summary()
     except Exception:
         database_status = "unavailable"
-        summary = {"sources": 0, "apis": 0, "policies": 0, "subjects": 0, "calls": 0, "risks": 0}
+        summary = {"sources": 0, "apis": 0, "policies": 0, "subjects": 0, "calls": 0}
     try:
         async with httpx.AsyncClient(timeout=3) as client:
             response = await client.get(f"{settings.homomorphic_service_url}/health")
@@ -146,6 +240,12 @@ async def data_api(request: Request):
         payload, returned_rows = await execute_data_api(request, context)
         duration_ms = round((time.perf_counter() - started_at) * 1000)
         record_allowed(context, returned_rows, duration_ms)
+        _safe_log_runtime_access(
+            decision="allow",
+            status=200,
+            duration_ms=duration_ms,
+            context=context,
+        )
         return JSONResponse(
             content=payload,
             headers={
@@ -157,56 +257,44 @@ async def data_api(request: Request):
     except RuntimeDenied as error:
         duration_ms = round((time.perf_counter() - started_at) * 1000)
         try:
-            record_runtime_engine_exception(error, duration_ms)
-        except Exception:
-            pass
-        try:
             record_denied(error, duration_ms)
         except Exception:
             pass
+        _safe_log_runtime_access(
+            decision="deny",
+            status=error.status,
+            duration_ms=duration_ms,
+            error=error,
+        )
         return _error(error.status, error.code, error.message, error.request_id)
     except (ValueError, PermissionError) as error:
         code = str(error) if str(error) in {"VALIDATION_ERROR", "FIELD_NOT_ALLOWED", "POLICY_NOT_FOUND"} else "VALIDATION_ERROR"
-        denied = RuntimeDenied(
-            code,
-            request_id=context.request_id if context else str(uuid4()),
-            api=context.api if context else None,
-            subject=context.subject if context else None,
-            policy=context.policy if context else None,
-            client_ip=context.client_ip if context else "gateway",
-            query_days=context.query_days if context else 0,
-            requested_rows=context.requested_rows if context else 0,
-        )
+        denied = _denied_after_context(code, context, context.request_id if context else str(uuid4()))
         duration_ms = round((time.perf_counter() - started_at) * 1000)
-        try:
-            record_runtime_engine_exception(denied, duration_ms)
-        except Exception:
-            pass
         try:
             record_denied(denied, duration_ms)
         except Exception:
             pass
+        _safe_log_runtime_access(
+            decision="deny",
+            status=denied.status,
+            duration_ms=duration_ms,
+            error=denied,
+        )
         return _error(denied.status, denied.code, denied.message, denied.request_id)
     except Exception:
-        denied = RuntimeDenied(
-            "INTERNAL_ERROR",
-            request_id=context.request_id if context else str(uuid4()),
-            api=context.api if context else None,
-            subject=context.subject if context else None,
-            policy=context.policy if context else None,
-            client_ip=context.client_ip if context else "gateway",
-            query_days=context.query_days if context else 0,
-            requested_rows=context.requested_rows if context else 0,
-        )
+        denied = _denied_after_context("INTERNAL_ERROR", context, context.request_id if context else str(uuid4()))
         duration_ms = round((time.perf_counter() - started_at) * 1000)
-        try:
-            record_runtime_engine_exception(denied, duration_ms)
-        except Exception:
-            pass
         try:
             record_denied(denied, duration_ms)
         except Exception:
             pass
+        _safe_log_runtime_access(
+            decision="deny",
+            status=denied.status,
+            duration_ms=duration_ms,
+            error=denied,
+        )
         return _error(denied.status, denied.code, denied.message, denied.request_id)
 
 
@@ -401,20 +489,4 @@ async def publish_policy_endpoint(policy_id: int, request: Request):
     except LookupError as error:
         return _error(404, "NOT_FOUND", str(error))
     except ValueError as error:
-        return _error(422, "VALIDATION_ERROR", str(error))
-
-
-@app.put("/management/apis/{api_id}/subjects/{subject_id}/behavior-baseline")
-async def save_behavior_baseline_endpoint(api_id: int, subject_id: int, request: Request):
-    auth_error = await _require_management_session(request)
-    if auth_error:
-        return auth_error
-    try:
-        values = await request.json()
-        if not isinstance(values, dict):
-            raise ValueError("行为基线参数不正确")
-        return {"data": upsert_behavior_baseline(subject_id, api_id, values)}
-    except LookupError as error:
-        return _error(404, "NOT_FOUND", str(error))
-    except (ValueError, TypeError) as error:
         return _error(422, "VALIDATION_ERROR", str(error))

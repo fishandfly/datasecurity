@@ -15,7 +15,6 @@ export type SecurityRuntimeHealth = {
     policies: number
     subjects: number
     calls: number
-    risks: number
   }
 }
 
@@ -59,20 +58,6 @@ export type ResourceLatestRows = {
   columns: Array<{ code: string; name: string; dataType: string }>
   rows: Array<Record<string, unknown>>
   validationResults: Array<{ passed: boolean; issues: string[]; warnings?: string[]; integrityPassed?: boolean }>
-}
-
-export type BehaviorBaselineInput = {
-  sample_from: string
-  sample_to: string
-  sample_count: number
-  frequency_avg: number
-  frequency_stddev: number
-  query_days_avg: number
-  query_days_stddev: number
-  rows_avg: number
-  rows_stddev: number
-  failure_avg: number
-  baseline_status: 'draft' | 'enabled' | 'disabled'
 }
 
 type RuntimeResponse<T> = { data: T }
@@ -140,18 +125,6 @@ export async function publishSecurityPolicy(id: string) {
   const response = await runtimeRequest<RuntimeResponse<{ policyVersion: number }>>(
     `/management/policies/${encodeURIComponent(id)}/publish`,
     { method: 'POST' },
-  )
-  return response.data
-}
-
-export async function saveResourceBehaviorBaseline(apiId: string, subjectId: string, values: BehaviorBaselineInput) {
-  const response = await runtimeRequest<RuntimeResponse<{ id: number; baseline_code: string; baseline_version: number; baseline_status: string }>>(
-    `/management/apis/${encodeURIComponent(apiId)}/subjects/${encodeURIComponent(subjectId)}/behavior-baseline`,
-    {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(values),
-    },
   )
   return response.data
 }

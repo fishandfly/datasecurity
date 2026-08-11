@@ -8,7 +8,6 @@ export type RealtimeMonitorInput = {
   tasks: Array<Record<string, unknown>>
   decisionLogs: Array<Record<string, unknown>>
   ingestLogs: Array<Record<string, unknown>>
-  riskEvents: Array<Record<string, unknown>>
   subjects: Array<Record<string, unknown>>
   apis: Array<Record<string, unknown>>
   streamingRuns: Array<Record<string, unknown>>
@@ -665,7 +664,6 @@ export function buildRealtimeMonitorGraphs(input: RealtimeMonitorInput): Realtim
   const failedTasks = tasks.filter((task) => text(task.task_status) === 'failed').length
   const exceptionSources = activeSources.filter((source) => text(source.connection_status) === 'exception').length
   const failedIngest = windowIngestLogs.filter((log) => text(log.result_status) === 'failed').length
-  const pendingRisks = input.riskEvents.filter((event) => text(event.event_status) === 'pending').length
 
   return {
     graphs: [
@@ -681,7 +679,6 @@ export function buildRealtimeMonitorGraphs(input: RealtimeMonitorInput): Realtim
       { label: '密态任务失败', value: failedTasks, tone: failedTasks ? 'danger' : 'normal' },
       { label: '窗口放行', value: allowCount },
       { label: '窗口拒绝', value: denyCount, tone: denyCount ? 'warning' : 'normal' },
-      { label: '待处置风险', value: pendingRisks, tone: pendingRisks ? 'warning' : 'normal' },
     ],
     collections: {
       sources: input.sources,
@@ -702,18 +699,17 @@ export function buildRealtimeMonitorGraphs(input: RealtimeMonitorInput): Realtim
 export async function fetchRealtimeMonitorData(windowHours: number): Promise<RealtimeMonitorData> {
   const since = windowHours > 0 ? new Date(Date.now() - windowHours * 3600_000).toISOString() : undefined
   const decisionFilter = since ? { requested_at: { $gte: since } } : undefined
-  const [sources, resources, policies, tasks, decisionLogs, ingestLogs, riskEvents, subjects, apis, streamingRuns, streamingWindows] = await Promise.all([
+  const [sources, resources, policies, tasks, decisionLogs, ingestLogs, subjects, apis, streamingRuns, streamingWindows] = await Promise.all([
     listSecurityV3Records('security_data_sources'),
     listSecurityV3Records('eco_data_resources'),
     listSecurityV3Records('eco_resource_security_policies'),
     listSecurityV3Records('security_confidential_tasks'),
     listSecurityV3Records('security_policy_decision_logs', { filter: decisionFilter, sort: ['-requested_at'] }),
     listSecurityV3Records('security_ingest_logs', { sort: ['-started_at'] }),
-    listSecurityV3Records('security_risk_events'),
     listSecurityV3Records('security_access_subjects'),
     listSecurityV3Records('security_api_resources'),
     listSecurityV3Records('security_streaming_runs', { sort: ['-started_at'] }),
     listSecurityV3Records('security_streaming_windows', { sort: ['-window_start'] }),
   ])
-  return buildRealtimeMonitorGraphs({ sources, resources, policies, tasks, decisionLogs, ingestLogs, riskEvents, subjects, apis, streamingRuns, streamingWindows, windowHours })
+  return buildRealtimeMonitorGraphs({ sources, resources, policies, tasks, decisionLogs, ingestLogs, subjects, apis, streamingRuns, streamingWindows, windowHours })
 }

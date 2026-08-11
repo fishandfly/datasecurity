@@ -1,4 +1,4 @@
-import { Activity, PencilLine, RefreshCw, ShieldCheck, UserMinus, UserPlus, Users } from 'lucide-react'
+import { RefreshCw, ShieldCheck, UserMinus, UserPlus, Users } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toErrorMessage } from '../lib/nocobase-client'
 import { formatSecurityV3Value, listSecurityV3Records, updateSecurityV3Record, type SecurityV3Record } from '../lib/nocobase-security-v3'
@@ -10,7 +10,6 @@ import {
 } from '../lib/resource-access-subjects'
 import { ensureDefaultSecurityApi } from '../lib/security-runtime-client'
 import { cn } from '../lib/utils'
-import { ResourceBehaviorBaselineDialog } from './resource-behavior-baseline-dialog'
 
 type ResourceAccessSubjectsPanelProps = {
   resourceId: string
@@ -26,8 +25,6 @@ function statusTone(value: unknown) {
 export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceAccessSubjectsPanelProps) {
   const [api, setApi] = useState<SecurityV3Record | null>(null)
   const [subjects, setSubjects] = useState<SecurityV3Record[]>([])
-  const [baselines, setBaselines] = useState<SecurityV3Record[]>([])
-  const [baselineSubject, setBaselineSubject] = useState<SecurityV3Record | null>(null)
   const [selectedSubjectId, setSelectedSubjectId] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isActing, setIsActing] = useState(false)
@@ -47,20 +44,11 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
         }),
         listSecurityV3Records('security_access_subjects', { sort: ['subject_code', 'id'] }),
       ])
-      const resolvedApi = apis[0] ?? null
-      const nextBaselines = resolvedApi?.id
-        ? await listSecurityV3Records('security_behavior_baselines', {
-          filter: { api_resource_id: resolvedApi.id },
-          sort: ['-baseline_version', '-updatedAt'],
-        })
-        : []
-      setApi(resolvedApi)
+      setApi(apis[0] ?? null)
       setSubjects(nextSubjects)
-      setBaselines(nextBaselines)
     } catch (currentError) {
       setApi(null)
       setSubjects([])
-      setBaselines([])
       setError(toErrorMessage(currentError, '读取数据资源数据应用失败'))
     } finally {
       setIsLoading(false)
@@ -81,10 +69,6 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
     )),
     [apiCode, subjects],
   )
-  const baselineBySubjectId = useMemo(() => new Map(
-    baselines.map((baseline) => [String(baseline.subject_id || ''), baseline]),
-  ), [baselines])
-
   useEffect(() => {
     if (selectedSubjectId && !availableSubjects.some((subject) => String(subject.id) === selectedSubjectId)) {
       setSelectedSubjectId('')
@@ -144,7 +128,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
-        此处维护数据应用对当前资源唯一 API <span className="font-mono font-semibold">{apiCode}</span> 的授权和行为基线。每个“主体 + API”只有一条行为基线；授权后仍需存在已发布且场景匹配的访问策略，请求才会被放行。
+        此处维护数据应用对当前资源唯一 API <span className="font-mono font-semibold">{apiCode}</span> 的授权。授权后仍需存在已发布且场景匹配的访问策略，请求才会被放行。
       </div>
 
       {error ? <div className="rounded-[10px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-3 text-[0.8125rem] text-[var(--status-danger-text)]">{error}</div> : null}
@@ -193,15 +177,14 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
           </button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1540px] border-collapse text-left text-[0.8125rem]">
+          <table className="w-full min-w-[980px] border-collapse text-left text-[0.8125rem]">
             <thead className="bg-[var(--surface-muted)] text-[var(--text-muted)]">
-              <tr>{['主体编码', '主体名称', '主体类型', '所属组织', '授权方式', '主体状态', '行为基线', '平均调用频率', '平均查询跨度', '平均返回行数', '操作'].map((label) => <th key={label} className="border-b border-[var(--line)] px-4 py-3 font-medium">{label}</th>)}</tr>
+              <tr>{['主体编码', '主体名称', '主体类型', '所属组织', '授权方式', '主体状态', '操作'].map((label) => <th key={label} className="border-b border-[var(--line)] px-4 py-3 font-medium">{label}</th>)}</tr>
             </thead>
             <tbody>
               {authorizedSubjects.map((subject) => {
                 const globalAuthorization = hasGlobalApiAuthorization(subject.allowed_api_codes_json)
                 const confirmingRevoke = pendingRevokeId === String(subject.id)
-                const baseline = baselineBySubjectId.get(String(subject.id))
                 return (
                   <tr key={String(subject.id)} className="border-b border-[var(--line)] last:border-b-0 hover:bg-[var(--surface-muted)]">
                     <td className="px-4 py-3.5 font-mono font-medium text-[var(--text-main)]">{String(subject.subject_code || '-')}</td>
@@ -211,31 +194,8 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
                     <td className="px-4 py-3.5"><span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-2.5 py-1 text-[0.75rem] text-[var(--status-info-text)]"><ShieldCheck className="h-3.5 w-3.5" />{globalAuthorization ? '全部 API' : '当前资源 API'}</span></td>
                     <td className="px-4 py-3.5"><span className={cn('inline-flex rounded-full border px-2.5 py-1 text-[0.75rem]', statusTone(subject.subject_status))}>{formatSecurityV3Value(subject.subject_status)}</span></td>
                     <td className="px-4 py-3.5">
-                      {baseline ? (
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1.5 font-mono font-medium text-[var(--text-main)]"><Activity className="h-3.5 w-3.5 text-[var(--primary)]" />{String(baseline.baseline_code || '-')}</div>
-                          <div className="flex items-center gap-2 text-[0.6875rem] text-[var(--text-muted)]">
-                            <span className={cn('rounded-full border px-2 py-0.5', statusTone(baseline.baseline_status))}>{formatSecurityV3Value(baseline.baseline_status)}</span>
-                            <span>V{Number(baseline.baseline_version || 1)} · {Number(baseline.sample_count || 0)} 个样本</span>
-                          </div>
-                        </div>
-                      ) : <span className="text-[var(--text-muted)]">未配置</span>}
-                    </td>
-                    <td className="px-4 py-3.5 text-[var(--text-secondary)]">{baseline ? `${Number(baseline.frequency_avg || 0)} ± ${Number(baseline.frequency_stddev || 0)}` : '-'}</td>
-                    <td className="px-4 py-3.5 text-[var(--text-secondary)]">{baseline ? `${Number(baseline.query_days_avg || 0)} ± ${Number(baseline.query_days_stddev || 0)} 天` : '-'}</td>
-                    <td className="px-4 py-3.5 text-[var(--text-secondary)]">{baseline ? `${Number(baseline.rows_avg || 0)} ± ${Number(baseline.rows_stddev || 0)}` : '-'}</td>
-                    <td className="px-4 py-3.5">
                       {canManage ? (
                         <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            disabled={isActing}
-                            title={baseline ? '编辑当前主体的行为基线' : '为当前主体配置行为基线'}
-                            onClick={() => setBaselineSubject(subject)}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-3 text-[0.75rem] font-medium text-[var(--status-info-text)] transition hover:brightness-95 disabled:opacity-50"
-                          >
-                            <PencilLine className="h-3.5 w-3.5" />{baseline ? '编辑基线' : '配置基线'}
-                          </button>
                           <button
                             type="button"
                             disabled={isActing || globalAuthorization}
@@ -259,14 +219,6 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
         </div>
         {!isLoading && authorizedSubjects.length === 0 ? <div className="px-4 py-10 text-center text-[0.875rem] text-[var(--text-muted)]">当前资源尚未授权任何数据应用</div> : null}
       </section>
-      <ResourceBehaviorBaselineDialog
-        open={Boolean(baselineSubject)}
-        api={api}
-        subject={baselineSubject}
-        baseline={baselineSubject ? baselineBySubjectId.get(String(baselineSubject.id)) ?? null : null}
-        onClose={() => setBaselineSubject(null)}
-        onSaved={async (message) => { setNotice(message); await load() }}
-      />
     </div>
   )
 }

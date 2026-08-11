@@ -30,7 +30,6 @@ type RawSecurityDataSource = Record<string, unknown> & {
   source_name?: string | null
   source_type?: string | null
   connection_status?: string | null
-  sensitivity_level?: string | null
   host?: string | null
   port?: number | string | null
   database_name?: string | null
@@ -38,8 +37,6 @@ type RawSecurityDataSource = Record<string, unknown> & {
   secret_ref?: string | null
   description?: string | null
   owner_dept?: string | null
-  policy_id?: number | string | null
-  workflow_key?: string | null
   source_tags?: unknown
   security_config_json?: unknown
   connection_options_json?: unknown
@@ -95,7 +92,6 @@ export type SecurityDataSourceType =
   | 'data_warehouse'
 
 export type SecurityDataSourceStatus = 'connected' | 'unconnected' | 'exception' | 'testing' | 'disabled'
-export type SecuritySensitivityLevel = 'public' | 'internal' | 'sensitive' | 'highly_sensitive'
 export type SecurityDatabaseDialect = 'postgresql' | 'mysql'
 export type OpenFheAlgorithm = 'BFV' | 'CKKS'
 export type OpenFheOperation = 'sum' | 'mean'
@@ -142,8 +138,6 @@ export type SecurityDataSourceRecord = {
   sourceTypeLabel: string
   status: SecurityDataSourceStatus
   statusLabel: string
-  sensitivity: SecuritySensitivityLevel
-  sensitivityLabel: string
   databaseDialect: SecurityDatabaseDialect
   connectionOptions: Record<string, unknown>
   host: string
@@ -153,9 +147,6 @@ export type SecurityDataSourceRecord = {
   secretRef: string
   description: string
   ownerDept: string
-  policyId: string
-  policyName: string
-  workflowKey: string
   tags: string[]
   securityConfig: SecurityDataSourceConfig
   monitor: SecurityDataSourceMonitor
@@ -164,7 +155,7 @@ export type SecurityDataSourceRecord = {
   updatedAt: string
 }
 
-export type EditableSecurityDataSource = Omit<SecurityDataSourceRecord, 'id' | 'sourceTypeLabel' | 'statusLabel' | 'sensitivityLabel' | 'policyName' | 'monitor' | 'createdAt' | 'updatedAt'> & {
+export type EditableSecurityDataSource = Omit<SecurityDataSourceRecord, 'id' | 'sourceTypeLabel' | 'statusLabel' | 'monitor' | 'createdAt' | 'updatedAt'> & {
   id?: string
 }
 
@@ -250,7 +241,6 @@ export type OpenFheHealth = {
 export type SecurityRuntimeSupportOptions = {
   sourceTypeOptions: SelectOption<SecurityDataSourceType>[]
   connectionStatusOptions: SelectOption<SecurityDataSourceStatus>[]
-  sensitivityOptions: SelectOption<SecuritySensitivityLevel>[]
   taskStatusOptions: SelectOption<ConfidentialTaskStatus>[]
   algorithmOptions: SelectOption<Lowercase<OpenFheAlgorithm>>[]
   riskOptions: SelectOption<SecurityRiskLevel>[]
@@ -410,11 +400,6 @@ function normalizeSourceStatus(value: unknown): SecurityDataSourceStatus {
   return ['connected', 'unconnected', 'exception', 'testing', 'disabled'].includes(normalized) ? normalized : 'unconnected'
 }
 
-function normalizeSensitivity(value: unknown): SecuritySensitivityLevel {
-  const normalized = normalizeText(value) as SecuritySensitivityLevel
-  return ['public', 'internal', 'sensitive', 'highly_sensitive'].includes(normalized) ? normalized : 'internal'
-}
-
 function normalizeTaskStatus(value: unknown): ConfidentialTaskStatus {
   const normalized = normalizeText(value) as ConfidentialTaskStatus
   return ['pending_approval', 'approved', 'running', 'completed', 'paused', 'failed'].includes(normalized) ? normalized : 'pending_approval'
@@ -529,8 +514,6 @@ async function fetchDictionaryItems(typeCodes: string[]) {
 function mapSourceRecord(raw: RawSecurityDataSource, labels: Map<string, string>): SecurityDataSourceRecord {
   const sourceType = normalizeSourceType(raw.source_type)
   const status = normalizeSourceStatus(raw.connection_status)
-  const sensitivity = normalizeSensitivity(raw.sensitivity_level)
-  const policy = normalizeObject(raw.policy)
   const connectionOptions = normalizeObject(raw.connection_options_json)
   const databaseDialect = connectionOptions.dialect === 'mysql' ? 'mysql' : 'postgresql'
   return {
@@ -541,8 +524,6 @@ function mapSourceRecord(raw: RawSecurityDataSource, labels: Map<string, string>
     sourceTypeLabel: labelFor(labels, sourceType),
     status,
     statusLabel: labelFor(labels, status),
-    sensitivity,
-    sensitivityLabel: labelFor(labels, sensitivity),
     databaseDialect,
     connectionOptions,
     host: normalizeText(raw.host),
@@ -552,9 +533,6 @@ function mapSourceRecord(raw: RawSecurityDataSource, labels: Map<string, string>
     secretRef: normalizeText(raw.secret_ref),
     description: normalizeText(raw.description),
     ownerDept: normalizeText(raw.owner_dept),
-    policyId: normalizeText(raw.policy_id),
-    policyName: normalizeText(policy.policy_name ?? policy.policyName),
-    workflowKey: normalizeText(raw.workflow_key),
     tags: normalizeStringArray(raw.source_tags),
     securityConfig: parseSourceConfig(raw.security_config_json),
     monitor: parseSourceMonitor(raw.last_monitor_json),
@@ -606,7 +584,6 @@ function sourceValues(record: EditableSecurityDataSource) {
     source_name: record.name,
     source_type: record.sourceType,
     connection_status: record.status,
-    sensitivity_level: record.sensitivity,
     host: record.host || null,
     port: record.port ? Number(record.port) : null,
     database_name: record.databaseName || null,
@@ -614,8 +591,6 @@ function sourceValues(record: EditableSecurityDataSource) {
     secret_ref: record.secretRef || null,
     description: record.description || null,
     owner_dept: record.ownerDept || null,
-    policy_id: record.policyId || null,
-    workflow_key: record.workflowKey || null,
     source_tags: record.tags,
     security_config_json: record.securityConfig,
     connection_options_json: {
@@ -644,7 +619,6 @@ export async function fetchSecurityRuntimeSupportOptions(): Promise<SecurityRunt
   const items = await fetchDictionaryItems([
     'source_type',
     'connection_status',
-    'sensitivity_level',
     'compute_status',
     'compute_algorithm',
     'risk_level',
@@ -658,7 +632,6 @@ export async function fetchSecurityRuntimeSupportOptions(): Promise<SecurityRunt
   return {
     sourceTypeOptions: mapOptions<SecurityDataSourceType>(byType('source_type')),
     connectionStatusOptions: mapOptions<SecurityDataSourceStatus>(byType('connection_status')),
-    sensitivityOptions: mapOptions<SecuritySensitivityLevel>(byType('sensitivity_level')),
     taskStatusOptions: mapOptions<ConfidentialTaskStatus>(byType('compute_status')),
     algorithmOptions: mapOptions<Lowercase<OpenFheAlgorithm>>(byType('compute_algorithm'))
       .filter((item) => item.value === 'bfv' || item.value === 'ckks'),
@@ -672,9 +645,8 @@ export async function fetchSecurityDataSources() {
       page: 1,
       pageSize: 200,
       sort: '-updatedAt',
-      appends: ['policy', 'owner_user'],
     }),
-    fetchDictionaryItems(['source_type', 'connection_status', 'sensitivity_level']),
+    fetchDictionaryItems(['source_type', 'connection_status']),
   ])
   const payload = sourceResponse.data as RawListResponse<RawSecurityDataSource>
   const labels = buildLabelLookup(dictionaryItems)
@@ -1011,7 +983,6 @@ export function useSecurityRuntimeSupportOptions(enabled: boolean) {
   const [data, setData] = useState<SecurityRuntimeSupportOptions>({
     sourceTypeOptions: [],
     connectionStatusOptions: [],
-    sensitivityOptions: [],
     taskStatusOptions: [],
     algorithmOptions: [],
     riskOptions: [],

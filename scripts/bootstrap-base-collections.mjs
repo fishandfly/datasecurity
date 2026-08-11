@@ -2,6 +2,7 @@ import { APIClient } from '@nocobase/sdk'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isDeprecatedSecurityField } from './security-field-model.mjs'
 
 const baseURL = process.env.NOCOBASE_API_BASE_URL || 'http://localhost:8196/api/'
 const account = process.env.NOCOBASE_ADMIN_ACCOUNT || 'nocobase'
@@ -58,6 +59,7 @@ async function main() {
   for (const collection of spec) {
     const names = new Set((await listAll('collections.fields', collection.name)).map((item) => item.name))
     for (const field of collection.fields) {
+      if (isDeprecatedSecurityField(collection.name, field.name)) continue
       if (names.has(field.name)) continue
       await client.resource('collections.fields', collection.name).create({ values: field })
       names.add(field.name)

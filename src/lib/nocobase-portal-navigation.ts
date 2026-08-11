@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
-  AlertTriangle,
   Braces,
   Building2,
   ClipboardList,
@@ -78,7 +77,6 @@ const NAVIGATION_STORAGE_KEY = 'JL_ECO_SERVICE_NAVIGATIONS'
 
 const iconMap: Record<string, LucideIcon> = {
   Activity,
-  AlertTriangle,
   Braces,
   Building2,
   ClipboardList,
@@ -101,7 +99,7 @@ const iconMap: Record<string, LucideIcon> = {
 const DEFAULT_PRIMARY_NAVIGATIONS: PortalPrimaryNavigationItem[] = [
   { key: 'nav_security_dashboard', title: '安全态势', target: '/security-governance/dashboard', icon: Activity },
   { key: 'nav_security_resources', title: '数据资源', target: '/security-governance/resources/catalog', icon: Database },
-  { key: 'nav_security_risks', title: '风险事件', target: '/security-governance/risks/events', icon: AlertTriangle },
+  { key: 'nav_security_logs', title: '日志中心', target: '/security-governance/logs', icon: ScrollText },
   { key: 'nav_security_components', title: '组件配置', target: '/security-governance/components', icon: Settings2 },
 ]
 

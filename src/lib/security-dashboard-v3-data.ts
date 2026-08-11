@@ -11,7 +11,7 @@ import type {
 } from './security-dashboard-data'
 
 export type SecurityDashboardCoreMetric = {
-  key: 'resources' | 'apis' | 'policies' | 'requests' | 'rejects' | 'risks' | 'tasks'
+  key: 'resources' | 'apis' | 'policies' | 'requests' | 'rejects' | 'tasks'
   label: string
   value: number
   helper: string
@@ -82,7 +82,6 @@ function taskEvents(tasks: SecurityV3Record[]): SecurityDashboardEvent[] {
 function runtimeEvents(
   ingestLogs: SecurityV3Record[],
   decisions: SecurityV3Record[],
-  risks: SecurityV3Record[],
   tasks: SecurityV3Record[],
 ) {
   const ingestEvents: SecurityDashboardEvent[] = ingestLogs.map((item) => ({
@@ -95,12 +94,7 @@ function runtimeEvents(
     description: `${text(item.request_id, '访问请求')}：${text(item.decision_result, '已决策')}，返回 ${number(item.returned_rows)} 行。`,
     user: text(record(item.subject).subject_name, '数据应用'), dept: text(record(item.api_resource).api_name, '数据 API'), risk: riskLabel(item.risk_level),
   }))
-  const riskEvents: SecurityDashboardEvent[] = risks.map((item) => ({
-    time: clock(item.detected_at || item.createdAt), sortTime: timestamp(item.detected_at || item.createdAt), type: '风险事件',
-    description: `${text(item.event_code, '风险事件')}：${text(item.risk_reason, '检测到异常访问行为')}`,
-    user: text(record(item.owner_user).nickname, '安全运行'), dept: text(item.action_taken, '待处置'), risk: riskLabel(item.risk_level),
-  }))
-  return [...ingestEvents, ...decisionEvents, ...riskEvents, ...taskEvents(tasks)]
+  return [...ingestEvents, ...decisionEvents, ...taskEvents(tasks)]
     .sort((left, right) => right.sortTime - left.sortTime)
     .slice(0, 10)
 }
@@ -154,7 +148,7 @@ export const EMPTY_SECURITY_DASHBOARD_V3_DATA: SecurityDashboardV3Data = {
 }
 
 export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3Data> {
-  const [allResources, allFields, allSources, apis, allPolicies, ingestLogs, decisions, risks, allTasks, streamingRuns] = await Promise.all([
+  const [allResources, allFields, allSources, apis, allPolicies, ingestLogs, decisions, allTasks, streamingRuns] = await Promise.all([
     listSecurityV3Records('eco_data_resources'),
     listSecurityV3Records('eco_resource_security_fields'),
     listSecurityV3Records('security_data_sources'),
@@ -162,7 +156,6 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
     listSecurityV3Records('eco_resource_security_policies'),
     listSecurityV3Records('security_ingest_logs', { appends: ['data_source'] }),
     listSecurityV3Records('security_policy_decision_logs', { appends: ['subject', 'api_resource'] }),
-    listSecurityV3Records('security_risk_events', { appends: ['owner_user'] }),
     listSecurityV3Records('security_confidential_tasks', { appends: ['subject'] }),
     listSecurityV3Records('security_streaming_runs'),
   ])
@@ -183,7 +176,6 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
   const enabledPolicies = policies.filter((item) => item.policy_status === 'enabled')
   const pendingPolicies = policies.filter((item) => item.publish_status !== 'success')
   const deniedRequests = decisions.filter((item) => ['deny', 'denied', '拒绝'].includes(String(item.decision_result))).length
-  const pendingRisks = risks.filter((item) => item.event_status !== 'closed').length
   const pendingTasks = tasks.filter((item) => ['pending', 'running'].includes(String(item.task_status))).length
   const completedTasks = tasks.filter((item) => ['success', 'completed'].includes(String(item.task_status))).length
   const failedTasks = tasks.filter((item) => item.task_status === 'failed').length
@@ -192,7 +184,7 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
   const streamingEventCount = streamingRuns.reduce((total, run) => total + number(run.processed_events), 0)
   const streamingAnomalyCount = streamingRuns.reduce((total, run) => total + number(run.anomaly_count), 0)
   const streamingAlert = streamingRuns.some((run) => ['warning', 'failed'].includes(String(run.status)))
-  const allEvents = runtimeEvents(ingestLogs, decisions, risks, tasks)
+  const allEvents = runtimeEvents(ingestLogs, decisions, tasks)
   const taskEventCount = tasks.reduce((total, task) => total + (Array.isArray(record(task.execution_summary_json).events) ? (record(task.execution_summary_json).events as unknown[]).length : 0), 0)
   const durationValues = decisions.map((item) => number(item.duration_ms)).filter((value) => value > 0)
   const classificationCoverage = percent(classifiedResourceCount, resources.length)
@@ -200,7 +192,7 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
   const integrityPassRate = integrityValues.length ? Math.round(integrityValues.reduce((total, value) => total + value, 0) / integrityValues.length) : 0
   const enabledPolicyRatio = percent(enabledPolicies.length, policies.length)
   const encryptedTransportCoverage = percent(encryptedSourceCount, sources.length)
-  const alerts = pendingRisks + failedTasks + sources.filter((item) => item.connection_status === 'exception').length
+  const alerts = deniedRequests + failedTasks + sources.filter((item) => item.connection_status === 'exception').length
   const overallScore = Math.max(0, Math.min(100, Math.round((classificationCoverage + fieldSecurityCoverage + integrityPassRate + enabledPolicyRatio + encryptedTransportCoverage) / 5) - alerts * 3))
   const sourceRates = monitorRows.map((item) => number(item.ingestRate))
   const maxSourceRate = Math.max(...sourceRates, 1)
@@ -213,9 +205,9 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
     pendingPolicies: pendingPolicies.length, alerts, blockedEstimate: deniedRequests, importantResources, sensitiveFields,
     classificationCoverage, fieldSecurityCoverage, enabledPolicyRatio, desensitizationCoverage: fieldSecurityCoverage,
     homomorphicTaskCount: tasks.length, homomorphicCompletedCount: completedTasks, homomorphicPendingCount: pendingTasks,
-    auditLogEstimate: ingestLogs.length + decisions.length + risks.length + taskEventCount,
+    auditLogEstimate: ingestLogs.length + decisions.length + taskEventCount,
     decisionLatencyMs: durationValues.length ? Math.round(durationValues.reduce((total, value) => total + value, 0) / durationValues.length) : 0,
-    queueSize: pendingRisks + pendingTasks + pendingPolicies.length,
+    queueSize: deniedRequests + pendingTasks + pendingPolicies.length,
     loadBars: sourceRates.map((value) => Math.round((value / maxSourceRate) * 100)),
   }
 
@@ -223,7 +215,7 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
     { id: 'data-access', title: '接入校验', path: '/security-governance/ingest/sources', value: String(sources.length), unit: '接入来源', status: alerts ? '需关注' : '运行稳定', helper: `当前接入 ${metrics.realtimeIngestRate.toLocaleString()} 条/秒`, primaryMetric: `完整性 ${integrityPassRate}%`, secondaryMetric: `传输保护 ${encryptedTransportCoverage}%`, tone: alerts ? 'amber' : 'green' },
     { id: 'resource-control', title: '数据资源', path: '/security-governance/resources/catalog', value: String(resources.length), unit: '核心资源', status: classificationCoverage === 100 ? '边界完整' : '待补标', helper: `${fields.length} 个资源字段纳入管控`, primaryMetric: `分类分级 ${classificationCoverage}%`, secondaryMetric: `字段安全 ${fieldSecurityCoverage}%`, tone: classificationCoverage === 100 ? 'green' : 'amber' },
     { id: 'access-control', title: '访问策略', path: '/security-governance/access/publish', value: String(enabledPolicies.length), unit: '启用策略', status: pendingPolicies.length ? '待发布' : '已发布', helper: `真实调用 ${decisions.length} 次，拒绝 ${deniedRequests} 次`, primaryMetric: `策略启用 ${enabledPolicyRatio}%`, secondaryMetric: `待发布 ${pendingPolicies.length} 条`, tone: pendingPolicies.length ? 'amber' : 'green' },
-    { id: 'risk-events', title: '风险事件', path: '/security-governance/risks/events', value: String(risks.length), unit: '风险事件', status: pendingRisks ? '待处置' : '无待办', helper: `高风险 ${risks.filter((item) => riskLabel(item.risk_level) === '高').length} 项`, primaryMetric: `待处置 ${pendingRisks} 项`, secondaryMetric: `真实拒绝 ${deniedRequests} 次`, tone: pendingRisks ? 'red' : 'blue' },
+    { id: 'risk-events', title: '访问日志', path: '/security-governance/logs', value: String(decisions.length), unit: '访问日志', status: deniedRequests ? '有拒绝' : '运行正常', helper: `拒绝 ${deniedRequests} 次`, primaryMetric: `审计 ${decisions.length} 条`, secondaryMetric: '保留完整访问链路', tone: deniedRequests ? 'amber' : 'blue' },
     { id: 'homomorphic-encryption', title: '同态加密', path: '/security-governance/homomorphic/tasks', value: String(tasks.length), unit: '验证任务', status: pendingTasks ? '待执行' : completedTasks ? '已完成' : '暂无任务', helper: `成功 ${completedTasks} 项，阶段事件 ${taskEventCount} 条`, primaryMetric: `待处理 ${pendingTasks} 项`, secondaryMetric: `失败 ${failedTasks} 项`, tone: failedTasks ? 'red' : pendingTasks ? 'amber' : 'blue' },
   ]
 
@@ -231,7 +223,7 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
     { label: '实时接入', value: `${metrics.realtimeIngestRate.toLocaleString()}/s`, detail: `${sources.length} 个启用来源`, tone: 'blue' },
     { label: '资源与 API', value: `${resources.length} / ${apis.length}`, detail: '启用资源 / 纳管 API', tone: 'green' },
     { label: '访问决策', value: decisions.length.toLocaleString(), detail: `拒绝 ${deniedRequests} 次`, tone: deniedRequests ? 'amber' : 'green' },
-    { label: '风险待办', value: pendingRisks.toLocaleString(), detail: `风险事件总数 ${risks.length}`, tone: pendingRisks ? 'red' : 'green' },
+    { label: '访问日志', value: decisions.length.toLocaleString(), detail: `拒绝 ${deniedRequests} 次`, tone: deniedRequests ? 'amber' : 'green' },
     { label: '密态任务', value: tasks.length.toLocaleString(), detail: `待执行 ${pendingTasks} 项`, tone: pendingTasks ? 'amber' : 'blue' },
     { label: '流式处理', value: streamingWindowCount.toLocaleString(), detail: `累计 ${streamingEventCount} 事件 / 异常 ${streamingAnomalyCount}`, tone: streamingAlert ? 'amber' : 'blue' },
   ]
@@ -243,7 +235,6 @@ export async function loadSecurityDashboardV3Data(): Promise<SecurityDashboardV3
     { key: 'policies', label: '启用策略', value: enabledPolicies.length, helper: `待发布 ${pendingPolicies.length} 条`, path: '/security-governance/access/publish', tone: 'amber', trend: policies.map((item) => number(item.policy_version)) },
     { key: 'requests', label: '访问调用', value: decisions.length, helper: '来自真实决策日志', path: '/security-governance/access/audit', tone: 'blue', trend: decisions.map((item) => number(item.duration_ms)) },
     { key: 'rejects', label: '拒绝调用', value: deniedRequests, helper: '仅统计真实拒绝决策', path: '/security-governance/access/audit', tone: deniedRequests ? 'red' : 'green', trend: decisions.map((item) => ['deny', 'denied', '拒绝'].includes(String(item.decision_result)) ? 100 : 0) },
-    { key: 'risks', label: '风险事件', value: risks.length, helper: `待处置 ${pendingRisks} 项`, path: '/security-governance/risks/events', tone: pendingRisks ? 'red' : 'green', trend: risks.map((item) => number(item.risk_score)) },
     { key: 'tasks', label: '同态任务', value: tasks.length, helper: `待执行 ${pendingTasks} 项`, path: '/security-governance/homomorphic/tasks', tone: pendingTasks ? 'amber' : 'blue', trend: tasks.map((item) => number(item.progress)) },
   ]
 

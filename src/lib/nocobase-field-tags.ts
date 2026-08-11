@@ -3,7 +3,7 @@ import { getAvailableCollectionNames } from './nocobase-collections'
 import { nocobaseClient, toErrorMessage } from './nocobase-client'
 import { loadAllPagesParallel } from './paginated-resource-loader'
 
-const TAG_GENERATION_POLICY_COLLECTION = 'jcTagGenerationPolicies'
+export const TAG_GENERATION_POLICY_COLLECTION = 'jcTagGenerationPolicies'
 const TAG_GENERATION_POLICY_PAGE_SIZE = 200
 
 type RawTagGenerationPolicyRecord = {
@@ -138,6 +138,52 @@ export function clearFieldTagGenerationPolicyCache() {
   fieldTagPolicyPromise = null
 }
 
+export type SaveFieldTagGenerationPolicyInput = Omit<FieldTagGenerationPolicyRecord, 'id' | 'createdAt' | 'updatedAt'>
+
+function toFieldTagGenerationPolicyValues(input: SaveFieldTagGenerationPolicyInput) {
+  return {
+    title: input.title.trim(),
+    enabled: input.enabled,
+    dataSourceKey: input.dataSourceKey.trim() || 'main',
+    collectionName: input.collectionName.trim(),
+    fieldName: input.fieldName.trim(),
+    logic: input.logic,
+    rules: input.rules
+      .map((rule) => ({
+        fieldName: rule.fieldName.trim(),
+        operator: rule.operator.trim() || 'eq',
+        value: rule.value.trim(),
+      }))
+      .filter((rule) => rule.fieldName),
+    tags: Array.from(new Set(input.tags.map((tag) => tag.trim()).filter(Boolean))),
+    sort: input.sort,
+    remark: input.remark.trim(),
+  }
+}
+
+export async function saveFieldTagGenerationPolicy(
+  id: string,
+  input: SaveFieldTagGenerationPolicyInput,
+) {
+  const values = toFieldTagGenerationPolicyValues(input)
+  if (!values.title || !values.collectionName || !values.fieldName || !values.tags.length) {
+    throw new Error('请完整填写标签规则的名称、目标对象、标签字段和标签名称')
+  }
+
+  if (id) {
+    await nocobaseClient.resource(TAG_GENERATION_POLICY_COLLECTION).update({ filterByTk: id, values })
+  } else {
+    await nocobaseClient.resource(TAG_GENERATION_POLICY_COLLECTION).create({ values })
+  }
+  clearFieldTagGenerationPolicyCache()
+}
+
+export async function deleteFieldTagGenerationPolicy(id: string) {
+  if (!id) return
+  await nocobaseClient.resource(TAG_GENERATION_POLICY_COLLECTION).destroy({ filterByTk: id })
+  clearFieldTagGenerationPolicyCache()
+}
+
 export async function fetchFieldTagGenerationPolicies({ force }: { force?: boolean } = {}) {
   if (force) {
     clearFieldTagGenerationPolicyCache()
@@ -215,5 +261,18 @@ export function useFieldTagGenerationPolicies(enabled: boolean) {
     }
   }, [enabled])
 
-  return { data, error, isLoading }
+  const refresh = async () => {
+    setIsLoading(true)
+    try {
+      const result = await fetchFieldTagGenerationPolicies({ force: true })
+      setData(result)
+      setError(null)
+    } catch (caught) {
+      setError(toErrorMessage(caught, '读取标签规则失败'))
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return { data, error, isLoading, refresh }
 }

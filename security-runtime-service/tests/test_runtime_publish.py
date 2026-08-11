@@ -10,13 +10,11 @@ from app.runtime import (
     RuntimeDenied,
     build_resource_runtime_config,
     ensure_resource_api,
-    ensure_behavior_baseline_unique_index,
     publish_api,
     publish_policy,
     preview_resource_latest_rows,
     resource_query,
     unpublish_api,
-    upsert_behavior_baseline,
     validate_api,
     validate_custom_query_sql,
 )
@@ -45,43 +43,6 @@ def resource_runtime_context():
         query_days=1,
         requested_rows=100,
     )
-
-
-def test_behavior_baseline_unique_index_rejects_existing_duplicates():
-    with patch("app.runtime.fetch_one", return_value={"subject_id": 2, "api_resource_id": 9, "duplicate_count": 2}), \
-         patch("app.runtime.execute") as execute:
-        with pytest.raises(ValueError, match="重复"):
-            ensure_behavior_baseline_unique_index()
-    execute.assert_not_called()
-
-
-def test_behavior_baseline_upsert_uses_subject_api_conflict_key():
-    saved = {"id": 7, "baseline_code": "BASE-APP-A-API-A", "baseline_version": 2, "baseline_status": "enabled"}
-    values = {
-        "sample_from": "2026-07-01T00:00:00+08:00",
-        "sample_to": "2026-07-15T00:00:00+08:00",
-        "sample_count": 120,
-        "frequency_avg": 10,
-        "frequency_stddev": 2,
-        "query_days_avg": 1,
-        "query_days_stddev": 0.5,
-        "rows_avg": 100,
-        "rows_stddev": 20,
-        "failure_avg": 0,
-        "baseline_status": "enabled",
-    }
-    with patch("app.runtime.ensure_behavior_baseline_unique_index"), \
-         patch("app.runtime.fetch_one", side_effect=[
-             {"id": 2, "subject_code": "APP-A"},
-             {"id": 9, "api_code": "API-A"},
-             saved,
-         ]) as fetch_one:
-        result = upsert_behavior_baseline(2, 9, values)
-
-    assert result == saved
-    statement = fetch_one.call_args_list[2].args[0]
-    assert "ON CONFLICT (subject_id, api_resource_id) DO UPDATE" in statement
-    assert "baseline_version=security_behavior_baselines.baseline_version + 1" in statement
 
 
 def test_build_resource_runtime_config_uses_resource_table_and_output_fields():
@@ -671,10 +632,9 @@ def test_publish_policy_rejects_output_mode_that_conflicts_with_protection_label
     assert "publish_status='failed'" in execute.call_args.args[0]
 
 
-def test_publish_label_group_policy_without_resource_or_api():
+def test_publish_policy_requires_resource_and_api():
     policy = {
         "id": 30,
-        "access_scope": "label_group",
         "policy_code": "POL-IMPORTANT-L2",
         "scenario": "resource-data-query",
         "subject_id": 2,
@@ -683,13 +643,6 @@ def test_publish_label_group_policy_without_resource_or_api():
         "output_mode": "masked",
         "subject_status": "enabled",
         "allowed_api_codes_json": ["*"],
-        "security_tags": ["重要数据"],
-        "security_profile_json": {
-            "match": "all",
-            "priority": 200,
-            "protectionLevels": ["l2"],
-            "fieldTags": ["需脱敏"],
-        },
         "max_requests_per_minute": 30,
         "max_query_days": 1,
         "max_rows": 500,
@@ -698,35 +651,7 @@ def test_publish_label_group_policy_without_resource_or_api():
     }
     with patch("app.runtime.fetch_one", return_value=policy), \
          patch("app.runtime.execute") as execute:
-        result = publish_policy(30)
-
-    assert result["publishStatus"] == "success"
-    parameters = execute.call_args.args[1]
-    snapshot = json.loads(parameters["policy_detail"])["runtimeSnapshot"]
-    assert snapshot["scope"] == "label_group"
-    assert snapshot["selector"]["resourceTags"] == ["重要数据"]
-    assert snapshot["selector"]["protectionLevels"] == ["l2"]
-    assert snapshot["selector"]["fieldTags"] == ["需脱敏"]
-
-
-def test_publish_label_group_policy_requires_at_least_one_selector():
-    policy = {
-        "id": 30,
-        "access_scope": "label_group",
-        "policy_code": "POL-EMPTY-GROUP",
-        "scenario": "resource-data-query",
-        "subject_id": 2,
-        "output_mode": "detail",
-        "subject_status": "enabled",
-        "allowed_api_codes_json": ["*"],
-        "max_requests_per_minute": 30,
-        "max_query_days": 1,
-        "max_rows": 500,
-        "risk_threshold": 60,
-    }
-    with patch("app.runtime.fetch_one", return_value=policy), \
-         patch("app.runtime.execute") as execute:
-        with pytest.raises(ValueError, match="至少需要一个"):
+        with pytest.raises(ValueError, match="数据资源不能为空.*API 资源不能为空"):
             publish_policy(30)
 
     assert "publish_status='failed'" in execute.call_args.args[0]

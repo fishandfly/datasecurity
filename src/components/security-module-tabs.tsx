@@ -1,15 +1,10 @@
 import {
-  Activity,
-  BookKey,
   Braces,
   Calculator,
   Database,
   FileCheck2,
   FileOutput,
-  Gauge,
   KeyRound,
-  ScrollText,
-  Tags,
   UploadCloud,
   Users,
   type LucideIcon,
@@ -19,7 +14,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
 import { cn } from '../lib/utils'
 
-export type SecurityModuleId = 'resources' | 'services' | 'ingest' | 'tags' | 'access' | 'risks' | 'homomorphic'
+export type SecurityModuleId = 'resources' | 'services' | 'ingest' | 'tags' | 'access' | 'homomorphic'
 
 type SecurityModuleTab = {
   label: string
@@ -35,28 +30,16 @@ const moduleTabs: Record<SecurityModuleId, SecurityModuleTab[]> = {
   ingest: [
     { label: '数据源', path: '/security-governance/ingest/sources', icon: Database },
     { label: '校验规则', path: '/security-governance/ingest/validation-rules', icon: FileCheck2 },
-    { label: '接入日志', path: '/security-governance/ingest/logs', icon: ScrollText },
   ],
-  tags: [
-    { label: '标签目录', path: '/security-governance/tags/catalog', icon: Tags },
-    { label: '标签规则', path: '/security-governance/tags/rules', icon: FileCheck2 },
-    { label: '标注记录', path: '/security-governance/tags/records', icon: FileOutput },
-  ],
+  tags: [],
   access: [
     { label: '数据应用', path: '/security-governance/access/subjects', icon: Users },
     { label: '策略发布', path: '/security-governance/access/publish', icon: UploadCloud },
-    { label: '行为基线', path: '/security-governance/access/baselines', icon: Gauge },
-    { label: '调用与决策日志', path: '/security-governance/access/audit', icon: ScrollText },
-  ],
-  risks: [
-    { label: '风险事件', path: '/security-governance/risks/events', icon: Activity },
-    { label: '日志中心', path: '/security-governance/risks/log-center', icon: ScrollText },
   ],
   homomorphic: [
     { label: '密钥管理', path: '/security-governance/homomorphic/keys', icon: KeyRound },
     { label: '同态任务', path: '/security-governance/homomorphic/tasks', icon: Calculator },
     { label: '计算结果', path: '/security-governance/homomorphic/results', icon: FileOutput },
-    { label: '同态日志', path: '/security-governance/homomorphic/logs', icon: BookKey },
   ],
 }
 

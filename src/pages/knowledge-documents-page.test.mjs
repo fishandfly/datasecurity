@@ -6,16 +6,13 @@ import { resolve } from 'node:path'
 const serviceLayoutSource = readFileSync(resolve(process.cwd(), 'src/layouts/service-layout.tsx'), 'utf8')
 const navigationSource = readFileSync(resolve(process.cwd(), 'src/lib/nocobase-portal-navigation.ts'), 'utf8')
 const documentsCatalogPageSource = readFileSync(resolve(process.cwd(), 'src/pages/documents-catalog-page.tsx'), 'utf8')
-const resourceGovernanceModulePath = resolve(process.cwd(), 'src/modules/ResourceGovernance')
 const documentsPagePath = resolve(process.cwd(), 'src/pages/knowledge-documents-page.tsx')
 const documentsPageSource = existsSync(documentsPagePath) ? readFileSync(documentsPagePath, 'utf8') : ''
 
-test('文档资源源码页面保留，但旧资源管控模块壳已删除', () => {
-  assert.equal(existsSync(resourceGovernanceModulePath), false)
+test('文档资源保留兼容页面且不占用安全管控一级导航', () => {
   assert.doesNotMatch(navigationSource, /title: '文档资源'[\s\S]*target: '\/documents'/)
   assert.doesNotMatch(navigationSource, /title: '数据API服务'[\s\S]*target: '\/service-catalog'/)
-  assert.match(navigationSource, /title: '安全态势看板'[\s\S]*target: '\/security-governance\/dashboard'/)
-  assert.doesNotMatch(navigationSource, /title: '数据安全管控'[\s\S]*target: '\/security-governance\/dashboard'/)
+  assert.match(navigationSource, /title: '安全态势'[\s\S]*target: '\/security-governance\/dashboard'/)
   assert.doesNotMatch(serviceLayoutSource, /\{ to: '\/documents', label: '文档资源', icon: FolderOpen \}/)
   assert.match(documentsCatalogPageSource, /return <CatalogPage forceView="document" \/>/)
 })

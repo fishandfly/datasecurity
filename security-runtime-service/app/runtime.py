@@ -7,7 +7,7 @@ import math
 import re
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -22,7 +22,6 @@ from .database import connection, execute, fetch_all, fetch_one
 from .security import (
     NONCE_PATTERN,
     api_key_matches,
-    calculate_risk,
     canonical_request,
     in_time_ranges,
     ip_allowed,
@@ -99,7 +98,6 @@ DEFAULT_ABNORMAL_ACCESS_RULES = {
     "queryRangeExceeded": {"enabled": True, "action": "deny", "riskScore": 60},
     "rowLimitExceeded": {"enabled": True, "action": "deny", "riskScore": 70},
     "scopeViolation": {"enabled": True, "action": "deny", "riskScore": 80},
-    "behaviorAnomaly": {"enabled": True, "action": "risk", "riskScore": 20},
 }
 
 
@@ -119,6 +117,8 @@ class RuntimeDenied(Exception):
         matched_labels: list[str] | tuple[str, ...] = (),
         risk_factors: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
         label_snapshot_version: str = "",
+        security_actions: list[str] | tuple[str, ...] = (),
+        security_snapshot: dict[str, Any] | None = None,
     ) -> None:
         status, message, default_risk = DENIALS[code]
         super().__init__(message)
@@ -136,6 +136,8 @@ class RuntimeDenied(Exception):
         self.matched_labels = list(matched_labels)
         self.risk_factors = list(risk_factors)
         self.label_snapshot_version = label_snapshot_version
+        self.security_actions = list(security_actions)
+        self.security_snapshot = security_snapshot or {}
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,8 @@ class RuntimeContext:
     matched_labels: tuple[str, ...] = ()
     risk_factors: tuple[dict[str, Any], ...] = ()
     label_snapshot_version: str = ""
+    security_actions: tuple[str, ...] = ()
+    security_snapshot: dict[str, Any] = field(default_factory=dict)
 
     @property
     def output_mode(self) -> str:
@@ -225,6 +229,277 @@ def _normalized_tags(*values: object) -> list[str]:
 
 def _policy_runtime_snapshot(policy: dict[str, Any]) -> dict[str, Any]:
     return _json_object(_json_object(policy.get("policy_detail_json")).get("runtimeSnapshot"))
+
+
+def _unique_strings(*values: object) -> list[str]:
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
+def _merge_hard_constraints(published: object, live: object) -> dict[str, Any]:
+    published_constraints = _json_object(published)
+    live_constraints = _json_object(live)
+    return {
+        "aggregateOnly": bool(published_constraints.get("aggregateOnly") or live_constraints.get("aggregateOnly")),
+        "encryptedOnly": bool(published_constraints.get("encryptedOnly") or live_constraints.get("encryptedOnly")),
+        "exportForbidden": bool(published_constraints.get("exportForbidden") or live_constraints.get("exportForbidden")),
+        "maskedFields": _unique_strings(
+            *_json_list(published_constraints.get("maskedFields")),
+            *_json_list(live_constraints.get("maskedFields")),
+        ),
+    }
+
+
+def runtime_security_snapshot(policy: dict[str, Any], api: dict[str, Any]) -> dict[str, Any]:
+    """Refresh resource labels for each request while retaining the published policy snapshot."""
+    published = _policy_runtime_snapshot(policy)
+    resource_id = api.get("resource_id") or policy.get("resource_id")
+    if not resource_id:
+        return published
+    try:
+        live = build_resource_label_snapshot(
+            resource_id,
+            str(policy.get("gateway_config_version") or published.get("version") or "runtime-live"),
+        )
+    except Exception:
+        # A published snapshot remains a fail-safe input if the metadata service is temporarily unavailable.
+        return published
+    return {
+        **published,
+        **live,
+        "version": str(live.get("version") or published.get("version") or ""),
+        "matchedLabels": _unique_strings(
+            *_normalized_tags(published.get("matchedLabels")),
+            *_normalized_tags(live.get("matchedLabels")),
+        ),
+        "fieldTags": {**_json_object(published.get("fieldTags")), **_json_object(live.get("fieldTags"))},
+        "hardConstraints": _merge_hard_constraints(
+            published.get("hardConstraints"), live.get("hardConstraints"),
+        ),
+        "classification": {
+            **_json_object(published.get("classification")),
+            **_json_object(live.get("classification")),
+        },
+    }
+
+
+def security_actions_for(policy: dict[str, Any], snapshot: dict[str, Any]) -> tuple[str, ...]:
+    """Return the concrete action chain produced by tag, classification and policy evaluation."""
+    protection_level = str(snapshot.get("protectionLevel") or "").upper()
+    sensitivity = str(snapshot.get("sensitivity") or "").strip()
+    output_mode = str(policy.get("output_mode") or "detail")
+    output_action = {
+        "detail": "ALLOW",
+        "masked": "MASK",
+        "aggregate": "ROUTE_TO_ISOLATION",
+        "encrypted": "ROUTE_TO_HE_COMPUTE",
+    }.get(output_mode, "DENY")
+    actions = ["TAG_ENRICH", "CLASSIFY"]
+    if protection_level:
+        actions.append(f"ISOLATE_{protection_level}")
+    if sensitivity:
+        actions.append(f"SENSITIVITY_{sensitivity.upper()}")
+    actions.extend(["POLICY_MATCH", output_action, "AUDIT"])
+    return tuple(_unique_strings(*actions))
+
+
+def security_control_evidence(
+    policy: dict[str, Any],
+    snapshot: dict[str, Any],
+    actions: list[str] | tuple[str, ...],
+    *,
+    api: dict[str, Any] | None = None,
+    subject: dict[str, Any] | None = None,
+    risk_factors: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
+    decision: str = "allow",
+    reason_code: str = "POLICY_ALLOW",
+) -> dict[str, Any]:
+    return {
+        "labelEnrichment": {
+            "matchedLabels": _normalized_tags(snapshot.get("matchedLabels")),
+            "fieldTags": _json_object(snapshot.get("fieldTags")),
+            "snapshotVersion": str(snapshot.get("version") or ""),
+        },
+        "classification": {
+            "protectionLevel": str(snapshot.get("protectionLevel") or ""),
+            "sensitivity": str(snapshot.get("sensitivity") or ""),
+            "attributes": _json_object(snapshot.get("classification")),
+        },
+        "dynamicPolicy": {
+            "policyId": policy.get("id"),
+            "policyCode": str(policy.get("policy_code") or ""),
+            "policyVersion": policy.get("policy_version"),
+            "outputMode": str(policy.get("output_mode") or "detail"),
+        },
+        "securityActions": list(actions),
+        "hardConstraints": _json_object(snapshot.get("hardConstraints")),
+        "accessPath": runtime_access_path(api or {}, subject or {}, policy),
+        "policyEvaluations": policy_evaluations(policy, risk_factors, decision, reason_code),
+    }
+
+
+def runtime_access_path(
+    api: dict[str, Any],
+    subject: dict[str, Any],
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a safe source -> resource -> application -> route summary."""
+    source_id = api.get("data_source_id")
+    resource_id = api.get("resource_id") or policy.get("resource_id")
+    source: dict[str, Any] = {"id": source_id}
+    resource: dict[str, Any] = {"id": resource_id}
+    try:
+        if source_id:
+            row = fetch_one(
+                "SELECT source_code, source_name FROM security_data_sources WHERE id=%(id)s LIMIT 1",
+                {"id": source_id},
+            ) or {}
+            source.update({"code": row.get("source_code"), "name": row.get("source_name")})
+        if resource_id:
+            row = fetch_one(
+                "SELECT resource_code, resource_name FROM eco_data_resources WHERE id=%(id)s LIMIT 1",
+                {"id": resource_id},
+            ) or {}
+            resource.update({"code": row.get("resource_code"), "name": row.get("resource_name")})
+    except Exception:
+        # The decision log remains usable when metadata lookup is temporarily unavailable.
+        pass
+    return {
+        "dataSource": source,
+        "dataResource": resource,
+        "dataApplication": {
+            "id": subject.get("id"),
+            "code": subject.get("subject_code"),
+            "name": subject.get("subject_name"),
+        },
+        "api": {
+            "id": api.get("id"),
+            "code": api.get("api_code"),
+            "name": api.get("api_name"),
+            "gatewayPath": api.get("gateway_path"),
+        },
+        "route": {
+            "accessMode": api.get("access_mode"),
+            "orchestratorPath": api.get("orchestrator_path"),
+            "outputMode": policy.get("output_mode"),
+        },
+    }
+
+
+def policy_evaluations(
+    policy: dict[str, Any],
+    risk_factors: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    decision: str,
+    reason_code: str,
+) -> list[dict[str, Any]]:
+    """Expose selected policy candidates and rule outcomes without request secrets."""
+    candidates = policy.get("_policyEvaluations")
+    if isinstance(candidates, list) and candidates:
+        evaluations = [dict(item) for item in candidates if isinstance(item, dict)]
+    else:
+        has_policy = bool(policy.get("id") or policy.get("policy_code"))
+        evaluations = [{
+            "policyId": policy.get("id"),
+            "policyCode": str(policy.get("policy_code") or "无匹配策略"),
+            "policyVersion": policy.get("policy_version"),
+            "result": "passed" if decision == "allow" else ("failed" if has_policy else "not_matched"),
+            "reason": "请求通过已发布访问策略校验" if decision == "allow" else (reason_code if has_policy else "主体、API 或调用场景未匹配到已发布策略，按默认拒绝"),
+        }]
+    factors = {str(item.get("code")): item for item in risk_factors if isinstance(item, dict)}
+    rule_names = {
+        "aggregateOnly": "仅允许聚合",
+        "encryptedOnly": "仅允许密态",
+        "queryRangeExceeded": "查询时间范围",
+        "scopeViolation": "数据范围",
+        "maskedFieldDetail": "明细字段脱敏",
+        "highFrequency": "调用频率",
+        "offHours": "允许时段",
+        "rowLimitExceeded": "返回行数",
+    }
+    rules = []
+    for code, label in rule_names.items():
+        factor = factors.get(code)
+        rules.append({
+            "code": code,
+            "name": label,
+            "result": "triggered" if factor else "passed",
+            "reason": str(factor.get("detail") or "未触发限制") if factor else "未触发限制",
+            "riskScore": factor.get("score") if factor else 0,
+        })
+    evaluations.append({
+        "stage": "runtime_rules",
+        "result": "passed" if decision == "allow" else "failed",
+        "reason": "请求已放行" if decision == "allow" else reason_code,
+        "rules": rules,
+    })
+    return evaluations
+
+
+def runtime_trace(
+    *,
+    policy: dict[str, Any] | None,
+    snapshot: dict[str, Any] | None,
+    matched_labels: list[str] | tuple[str, ...] = (),
+    actions: list[str] | tuple[str, ...] = (),
+    risk_factors: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
+    decision: str,
+    risk_score: int = 0,
+    reason_code: str = "",
+) -> list[dict[str, Any]]:
+    """Build one ordered, request-scoped trace for the five runtime controls."""
+    policy = policy or {}
+    snapshot = snapshot or {}
+    output_mode = str(policy.get("output_mode") or "detail")
+    action_outcome = "ALLOW" if decision == "allow" else "DENY"
+    if decision == "allow":
+        action_outcome = {
+            "detail": "ALLOW",
+            "masked": "MASK",
+            "aggregate": "ROUTE_TO_ISOLATION",
+            "encrypted": "ROUTE_TO_HE_COMPUTE",
+        }.get(output_mode, "ALLOW")
+    return [
+        {
+            "stage": "label_enrichment",
+            "name": "标签补全",
+            "status": "completed" if snapshot or matched_labels else "not_evaluated",
+            "matchedLabels": list(matched_labels) or _normalized_tags(snapshot.get("matchedLabels")),
+            "snapshotVersion": str(snapshot.get("version") or ""),
+            "fieldTags": _json_object(snapshot.get("fieldTags")),
+        },
+        {
+            "stage": "classification",
+            "name": "分类分级",
+            "status": "completed" if snapshot else "not_evaluated",
+            "protectionLevel": str(snapshot.get("protectionLevel") or ""),
+            "sensitivity": str(snapshot.get("sensitivity") or ""),
+            "attributes": _json_object(snapshot.get("classification")),
+        },
+        {
+            "stage": "dynamic_policy",
+            "name": "动态策略",
+            "status": "matched" if policy else "not_matched",
+            "policyId": policy.get("id"),
+            "policyCode": str(policy.get("policy_code") or ""),
+            "policyVersion": policy.get("policy_version"),
+            "outputMode": output_mode if policy else "",
+            "reasonCode": reason_code,
+            "evaluations": policy_evaluations(policy, risk_factors, decision, reason_code),
+        },
+        {
+            "stage": "security_action",
+            "name": "安全动作执行",
+            "status": "completed" if decision == "allow" else "blocked",
+            "actions": list(actions),
+            "outcome": action_outcome,
+        },
+        {
+            "stage": "audit",
+            "name": "审计记录",
+            "status": "audit_recorded",
+            "decision": decision,
+            "riskScore": risk_score,
+        },
+    ]
 
 
 def build_resource_label_snapshot(resource_id: object, snapshot_version: str) -> dict[str, Any]:
@@ -329,66 +604,6 @@ def build_resource_label_snapshot(resource_id: object, snapshot_version: str) ->
 
 def build_policy_runtime_snapshot(policy: dict[str, Any], snapshot_version: str) -> dict[str, Any]:
     return build_resource_label_snapshot(policy.get("resource_id"), snapshot_version)
-
-
-def policy_label_selector(policy: dict[str, Any]) -> dict[str, Any]:
-    configured = _json_object(policy.get("security_profile_json"))
-    try:
-        priority = int(configured.get("priority") or 100)
-    except (TypeError, ValueError):
-        priority = 100
-    return {
-        "match": "any" if str(configured.get("match") or "all").lower() == "any" else "all",
-        "priority": max(0, min(1000, priority)),
-        "resourceTags": _normalized_tags(policy.get("security_tags"), configured.get("resourceTags")),
-        "protectionLevels": [str(item).strip().lower() for item in _json_list(configured.get("protectionLevels")) if str(item).strip()],
-        "fieldTags": _normalized_tags(configured.get("fieldTags")),
-        "securityCategoryId": policy.get("security_category_id") or configured.get("securityCategoryId"),
-        "securityLevelId": policy.get("security_level_id") or configured.get("securityLevelId"),
-        "dataSubjectTypeId": policy.get("data_subject_type_id") or configured.get("dataSubjectTypeId"),
-    }
-
-
-def policy_selector_conditions(selector: dict[str, Any]) -> list[bool]:
-    return [
-        bool(selector.get("resourceTags")),
-        bool(selector.get("protectionLevels")),
-        bool(selector.get("fieldTags")),
-        selector.get("securityCategoryId") not in {None, ""},
-        selector.get("securityLevelId") not in {None, ""},
-        selector.get("dataSubjectTypeId") not in {None, ""},
-    ]
-
-
-def resource_matches_policy_selector(snapshot: dict[str, Any], selector: dict[str, Any]) -> bool:
-    checks: list[bool] = []
-    resource_tags = set(_normalized_tags(snapshot.get("matchedLabels")))
-    selected_resource_tags = set(_normalized_tags(selector.get("resourceTags")))
-    if selected_resource_tags:
-        checks.append(selected_resource_tags.issubset(resource_tags))
-    selected_levels = {str(item).lower() for item in _json_list(selector.get("protectionLevels"))}
-    if selected_levels:
-        checks.append(str(snapshot.get("protectionLevel") or "").lower() in selected_levels)
-    selected_field_tags = set(_normalized_tags(selector.get("fieldTags")))
-    if selected_field_tags:
-        current_field_tags = {
-            tag
-            for tags in _json_object(snapshot.get("fieldTags")).values()
-            for tag in _normalized_tags(tags)
-        }
-        checks.append(selected_field_tags.issubset(current_field_tags))
-    classification = _json_object(snapshot.get("classification"))
-    for selector_key, snapshot_key in (
-        ("securityCategoryId", "securityCategoryId"),
-        ("securityLevelId", "securityLevelId"),
-        ("dataSubjectTypeId", "dataSubjectTypeId"),
-    ):
-        selected = selector.get(selector_key)
-        if selected not in {None, ""}:
-            checks.append(str(classification.get(snapshot_key) or "") == str(selected))
-    if not checks:
-        return False
-    return any(checks) if selector.get("match") == "any" else all(checks)
 
 
 def abnormal_access_rule(policy: dict[str, Any], key: str) -> dict[str, Any]:
@@ -1078,57 +1293,35 @@ def load_subject_by_api_key(api_key: str) -> dict[str, Any] | None:
 def load_policy(subject_id: int, api_id: int, scenario: str) -> dict[str, Any] | None:
     candidates = fetch_all(
         """
-        SELECT policy.*, baseline.frequency_avg, baseline.frequency_stddev,
-               baseline.query_days_avg, baseline.query_days_stddev,
-               baseline.rows_avg, baseline.rows_stddev,
-               baseline.normal_time_ranges_json AS baseline_time_ranges,
-               current_api.resource_id AS requested_resource_id
+        SELECT policy.*
         FROM eco_resource_security_policies policy
         JOIN security_api_resources current_api ON current_api.id = %(api_id)s
-        LEFT JOIN security_behavior_baselines baseline
-          ON baseline.subject_id = policy.subject_id
-         AND baseline.api_resource_id = current_api.id
-         AND baseline.baseline_status = 'enabled'
         WHERE policy.policy_kind = 'access_policy'
           AND policy.policy_status = 'enabled'
           AND policy.publish_status = 'success'
           AND policy.subject_id = %(subject_id)s
           AND policy.scenario = %(scenario)s
-          AND (
-            policy.api_resource_id = current_api.id
-            OR (policy.access_scope = 'label_group' AND policy.api_resource_id IS NULL)
-          )
-        ORDER BY CASE WHEN policy.api_resource_id = current_api.id THEN 0 ELSE 1 END,
-                 policy.policy_version DESC, policy.id DESC
+          AND policy.resource_id = current_api.resource_id
+          AND policy.api_resource_id = current_api.id
+        ORDER BY policy.policy_version DESC, policy.id DESC
         """,
         {"subject_id": subject_id, "api_id": api_id, "scenario": scenario},
     )
-    exact = next((candidate for candidate in candidates if candidate.get("api_resource_id") is not None), None)
-    if exact:
-        return exact
-    grouped = [candidate for candidate in candidates if candidate.get("access_scope") == "label_group"]
-    if not grouped:
+    candidates = [candidate for candidate in candidates if str(candidate.get("api_resource_id") or "") == str(api_id)]
+    if not candidates:
         return None
-    resource_id = grouped[0].get("requested_resource_id")
-    snapshot_version = str(grouped[0].get("gateway_config_version") or "runtime-live")
-    resource_snapshot = build_resource_label_snapshot(resource_id, snapshot_version)
-    matches = []
-    for candidate in grouped:
-        selector = policy_label_selector(candidate)
-        if resource_matches_policy_selector(resource_snapshot, selector):
-            specificity = sum(policy_selector_conditions(selector))
-            matches.append((int(selector["priority"]), specificity, int(candidate.get("policy_version") or 0), candidate))
-    if not matches:
-        return None
-    selected = max(matches, key=lambda item: (item[0], item[1], item[2]))[3]
-    selected = dict(selected)
-    detail = _json_object(selected.get("policy_detail_json"))
-    detail["runtimeSnapshot"] = {
-        **resource_snapshot,
-        "version": str(selected.get("gateway_config_version") or resource_snapshot.get("version") or ""),
-        "matchedPolicySelector": policy_label_selector(selected),
-    }
-    selected["policy_detail_json"] = detail
+    selected_candidate = candidates[0]
+    selected = dict(selected_candidate)
+    selected["_policyEvaluations"] = [
+        {
+            "policyId": candidate.get("id"),
+            "policyCode": str(candidate.get("policy_code") or ""),
+            "policyVersion": candidate.get("policy_version"),
+            "result": "passed" if candidate is selected_candidate else "not_selected",
+            "reason": "资源、数据应用和 API 精确匹配" if candidate is selected_candidate else "未被选择的同版本策略",
+        }
+        for candidate in candidates
+    ]
     return selected
 
 
@@ -1232,10 +1425,11 @@ def authorize(request, body: bytes) -> RuntimeContext:
         raise RuntimeDenied(
             "POLICY_NOT_FOUND", request_id=request_id, api=api, subject=subject, client_ip=address
         )
-    snapshot = _policy_runtime_snapshot(policy)
+    snapshot = runtime_security_snapshot(policy, api)
     matched_labels = tuple(_normalized_tags(snapshot.get("matchedLabels")))
     label_snapshot_version = str(snapshot.get("version") or "")
     hard_constraints = _json_object(snapshot.get("hardConstraints"))
+    security_actions = security_actions_for(policy, snapshot)
     risk_factors: list[dict[str, Any]] = []
     query_days = 0.0
     requested_rows = 0
@@ -1259,6 +1453,8 @@ def authorize(request, body: bytes) -> RuntimeContext:
             matched_labels=matched_labels,
             risk_factors=risk_factors,
             label_snapshot_version=label_snapshot_version,
+            security_actions=security_actions,
+            security_snapshot=snapshot,
         )
 
     if hard_constraints.get("aggregateOnly") and str(policy.get("output_mode") or "detail") != "aggregate":
@@ -1266,6 +1462,9 @@ def authorize(request, body: bytes) -> RuntimeContext:
         raise policy_denied("TAG_CONSTRAINT_VIOLATION", 90)
     if hard_constraints.get("encryptedOnly") and str(policy.get("output_mode") or "detail") != "encrypted":
         add_risk_factor("encryptedOnly", "仅允许密态", 95, "资源标签要求仅输出密态结果")
+        raise policy_denied("TAG_CONSTRAINT_VIOLATION", 95)
+    if str(policy.get("output_mode") or "detail") == "encrypted" and not api.get("supports_homomorphic"):
+        add_risk_factor("homomorphicCapability", "密态执行器不可用", 95, "策略要求密态计算，但数据 API 未声明同态计算能力")
         raise policy_denied("TAG_CONSTRAINT_VIOLATION", 95)
     if settings.enforce_source_ip and not ip_allowed(address, _json_list(policy.get("source_ips_json"))):
         raise RuntimeDenied(
@@ -1324,9 +1523,12 @@ def authorize(request, body: bytes) -> RuntimeContext:
         raise policy_denied("SCOPE_VIOLATION", risk_points)
     fields = effective_param("fields")
     requested_codes: list[str] = []
-    if fields:
-        requested_fields = [item.strip() for item in str(fields).split(",") if item.strip()]
-        runtime_field_map = _json_object(_json_object(api.get("runtime_config_json")).get("fieldMap"))
+    runtime_config = _json_object(api.get("runtime_config_json"))
+    runtime_field_map = _json_object(runtime_config.get("fieldMap") or runtime_config.get("field_map"))
+    requested_fields = [item.strip() for item in str(fields or "").split(",") if item.strip()]
+    if not requested_fields and runtime_field_map:
+        requested_fields = [str(item).strip() for item in _json_list(runtime_config.get("defaultFields") or runtime_config.get("default_fields")) if str(item).strip()]
+    if requested_fields:
         if runtime_field_map:
             known_codes = {str(code).upper() for code in runtime_field_map}
             requested_codes = [item.upper() for item in requested_fields]
@@ -1372,32 +1574,6 @@ def authorize(request, body: bytes) -> RuntimeContext:
         add_risk_factor("rowLimitExceeded", "返回行数超限", risk_points, f"请求 {requested_rows} 行，策略上限 {int(policy.get('max_rows') or 1000)} 行")
     if should_deny:
         raise policy_denied("ROW_LIMIT_EXCEEDED", risk_points)
-    behavior_rule = abnormal_access_rule(policy, "behaviorAnomaly")
-    baseline = policy if policy.get("frequency_avg") is not None else None
-    behavior_score = calculate_risk(
-        now=datetime.now().astimezone(),
-        allowed_time_ranges=[],
-        frequency=frequency,
-        query_days=query_days,
-        requested_rows=requested_rows,
-        max_rows=2**31,
-        baseline=baseline if behavior_rule["enabled"] else None,
-    )
-    should_deny, risk_points = violation_risk(
-        policy, "behaviorAnomaly", behavior_score > 0
-    )
-    if risk_points and snapshot:
-        risk_points = min(100, round(risk_points * float(snapshot.get("riskMultiplier") or 1)))
-    extra_risk += risk_points
-    if risk_points:
-        multiplier = float(snapshot.get("riskMultiplier") or 1)
-        detail = "行为偏离已学习基线"
-        if multiplier > 1:
-            detail += f"，按 {snapshot.get('sensitivity') or '敏感'} 级数据放大 {multiplier:g} 倍"
-        add_risk_factor("behaviorAnomaly", "行为基线偏离", risk_points, detail)
-    if should_deny:
-        raise policy_denied("RISK_REJECTED", risk_points)
-
     if snapshot and str(subject.get("subject_type") or "") == "external_party":
         extra_risk += 10
         add_risk_factor("externalSubject", "外部访问主体", 10, "外部访问方请求受控数据")
@@ -1421,6 +1597,8 @@ def authorize(request, body: bytes) -> RuntimeContext:
         matched_labels=matched_labels,
         risk_factors=tuple(risk_factors),
         label_snapshot_version=label_snapshot_version,
+        security_actions=security_actions,
+        security_snapshot=snapshot,
     )
 
 
@@ -2148,6 +2326,31 @@ def _homomorphic_denied(code: str, context: RuntimeContext) -> RuntimeDenied:
         client_ip=context.client_ip,
         query_days=context.query_days,
         requested_rows=context.requested_rows,
+        matched_labels=context.matched_labels,
+        risk_factors=context.risk_factors,
+        label_snapshot_version=context.label_snapshot_version,
+        security_actions=(*context.security_actions, "DENY"),
+        security_snapshot=context.security_snapshot,
+    )
+
+
+def _context_denied(code: str, context: RuntimeContext, *, risk_score: int | None = None) -> RuntimeDenied:
+    """Preserve the evaluated control chain when execution fails after authorization."""
+    return RuntimeDenied(
+        code,
+        request_id=context.request_id,
+        api=context.api,
+        subject=context.subject,
+        policy=context.policy,
+        client_ip=context.client_ip,
+        query_days=context.query_days,
+        requested_rows=context.requested_rows,
+        risk_score=risk_score,
+        matched_labels=context.matched_labels,
+        risk_factors=context.risk_factors,
+        label_snapshot_version=context.label_snapshot_version,
+        security_actions=(*context.security_actions, "DENY"),
+        security_snapshot=context.security_snapshot,
     )
 
 
@@ -2714,14 +2917,26 @@ async def execute_homomorphic_resource_request(
 async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
     mode = str(context.api.get("access_mode") or "")
     processing_path = str(context.api.get("orchestrator_path") or "")
+    if mode == "direct" and context.output_mode != "detail":
+        raise RuntimeDenied(
+            "TAG_CONSTRAINT_VIOLATION", request_id=context.request_id, api=context.api,
+            subject=context.subject, policy=context.policy, client_ip=context.client_ip,
+            query_days=context.query_days, requested_rows=context.requested_rows,
+            risk_score=90, matched_labels=context.matched_labels,
+            risk_factors=({
+                "code": "directRouteIsolation",
+                "label": "直连路由隔离",
+                "score": 90,
+                "detail": "直连数据服务无法执行脱敏、聚合或密态动作，已阻断原样转发",
+            },),
+            label_snapshot_version=context.label_snapshot_version,
+            security_actions=(*context.security_actions, "DENY"),
+            security_snapshot=context.security_snapshot,
+        )
     if mode == "direct":
         upstream = str(context.api.get("upstream_url") or "")
         if not upstream.startswith(("http://", "https://")):
-            raise RuntimeDenied(
-                "UPSTREAM_UNAVAILABLE", request_id=context.request_id, api=context.api,
-                subject=context.subject, policy=context.policy, client_ip=context.client_ip,
-                query_days=context.query_days, requested_rows=context.requested_rows,
-            )
+            raise _context_denied("UPSTREAM_UNAVAILABLE", context)
         try:
             forwarded_headers = {"accept": "application/json"}
             content_type = request.headers.get("content-type")
@@ -2738,11 +2953,7 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
                 response.raise_for_status()
                 payload = response.json()
         except (httpx.HTTPError, ValueError) as error:
-            raise RuntimeDenied(
-                "UPSTREAM_UNAVAILABLE", request_id=context.request_id, api=context.api,
-                subject=context.subject, policy=context.policy, client_ip=context.client_ip,
-                query_days=context.query_days, requested_rows=context.requested_rows,
-            ) from error
+            raise _context_denied("UPSTREAM_UNAVAILABLE", context) from error
         return payload, len(payload) if isinstance(payload, list) else 1
     params: dict[str, Any] = dict(request.query_params)
     if request.method == "POST":
@@ -2765,11 +2976,7 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
         return {"requestId": context.request_id, "data": rows, "meta": meta}, len(rows)
     if processing_path == "/internal/region-hourly":
         if context.output_mode != "aggregate":
-            raise RuntimeDenied(
-                "VALIDATION_ERROR", request_id=context.request_id, api=context.api,
-                subject=context.subject, policy=context.policy, client_ip=context.client_ip,
-                query_days=context.query_days, requested_rows=context.requested_rows,
-            )
+            raise _context_denied("VALIDATION_ERROR", context)
         rows = aggregate_measurements(params, context)
         return {
             "requestId": context.request_id,
@@ -2793,11 +3000,7 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
                 },
             }, len(rows)
         if context.output_mode not in {"detail", "masked"}:
-            raise RuntimeDenied(
-                "POLICY_NOT_FOUND", request_id=context.request_id, api=context.api,
-                subject=context.subject, policy=context.policy, client_ip=context.client_ip,
-                query_days=context.query_days, requested_rows=context.requested_rows,
-            )
+            raise _context_denied("POLICY_NOT_FOUND", context)
         rows, meta = resource_query(params, context)
         meta.update({"decision": "allow", "outputMode": context.output_mode, "riskLevel": context.level})
         return {"requestId": context.request_id, "data": rows, "meta": meta}, len(rows)
@@ -2823,22 +3026,38 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
             "message": "配网线变关系辨识模型服务已完成接入档案与路径占位，演示环境不执行真实模型。",
             "meta": {"decision": "allow", "outputMode": context.output_mode, "riskLevel": context.level},
         }, 0
-    raise RuntimeDenied(
-        "ROUTE_NOT_FOUND", request_id=context.request_id, api=context.api, subject=context.subject,
-        policy=context.policy, client_ip=context.client_ip, query_days=context.query_days,
-        requested_rows=context.requested_rows,
-    )
+    raise _context_denied("ROUTE_NOT_FOUND", context)
 
 
 def record_allowed(context: RuntimeContext, returned_rows: int, duration_ms: int) -> None:
     now = datetime.now(timezone.utc)
-    snapshot = _policy_runtime_snapshot(context.policy)
+    snapshot = context.security_snapshot or runtime_security_snapshot(context.policy, context.api)
     evidence = {
+        "traceVersion": "runtime-v1",
         "matchedLabels": list(context.matched_labels),
         "riskFactors": list(context.risk_factors),
         "runtimeConfigVersion": context.policy.get("gateway_config_version"),
         "labelSnapshotVersion": context.label_snapshot_version,
-        "hardConstraints": _json_object(snapshot.get("hardConstraints")),
+        **security_control_evidence(
+            context.policy,
+            snapshot,
+            context.security_actions,
+            api=context.api,
+            subject=context.subject,
+            risk_factors=context.risk_factors,
+            decision="allow",
+            reason_code="POLICY_ALLOW",
+        ),
+        "runtimeTrace": runtime_trace(
+            policy=context.policy,
+            snapshot=snapshot,
+            matched_labels=context.matched_labels,
+            actions=context.security_actions,
+            risk_factors=context.risk_factors,
+            decision="allow",
+            risk_score=context.risk_score,
+            reason_code="POLICY_ALLOW",
+        ),
     }
     execute(
         """
@@ -2877,13 +3096,33 @@ def record_allowed(context: RuntimeContext, returned_rows: int, duration_ms: int
 
 def record_denied(error: RuntimeDenied, duration_ms: int) -> None:
     now = datetime.now(timezone.utc)
-    snapshot = _policy_runtime_snapshot(error.policy or {})
+    snapshot = error.security_snapshot or runtime_security_snapshot(error.policy or {}, error.api or {})
     evidence = {
+        "traceVersion": "runtime-v1",
         "matchedLabels": error.matched_labels,
         "riskFactors": error.risk_factors,
         "runtimeConfigVersion": error.policy.get("gateway_config_version") if error.policy else None,
         "labelSnapshotVersion": error.label_snapshot_version,
-        "hardConstraints": _json_object(snapshot.get("hardConstraints")),
+        **security_control_evidence(
+            error.policy or {},
+            snapshot,
+            error.security_actions or ("DENY", "AUDIT"),
+            api=error.api,
+            subject=error.subject,
+            risk_factors=error.risk_factors,
+            decision="deny",
+            reason_code=error.code,
+        ),
+        "runtimeTrace": runtime_trace(
+            policy=error.policy,
+            snapshot=snapshot,
+            matched_labels=error.matched_labels,
+            actions=error.security_actions or ("DENY", "AUDIT"),
+            risk_factors=error.risk_factors,
+            decision="deny",
+            risk_score=error.risk_score,
+            reason_code=error.code,
+        ),
     }
     with connection() as current, current.cursor() as cursor:
         cursor.execute(
@@ -2900,7 +3139,7 @@ def record_denied(error: RuntimeDenied, duration_ms: int) -> None:
               %(reason)s, %(risk_score)s, %(risk_level)s, %(client_ip)s,
               %(query_days)s, %(requested_rows)s, 0, %(response_status)s,
               0, %(duration_ms)s, %(evidence)s::jsonb, %(now)s, %(now)s, %(now)s
-            ) ON CONFLICT (request_id) DO NOTHING RETURNING id
+            ) ON CONFLICT (request_id) DO NOTHING
             """,
             {
                 "request_id": error.request_id,
@@ -2921,28 +3160,6 @@ def record_denied(error: RuntimeDenied, duration_ms: int) -> None:
                 "now": now,
             },
         )
-        row = cursor.fetchone()
-        if row and error.risk_score >= 70:
-            cursor.execute(
-                """
-                INSERT INTO security_risk_events (
-                  event_code, risk_type, risk_score, risk_level, risk_reason,
-                  action_taken, event_status, decision_log_id, "createdAt", "updatedAt"
-                ) VALUES (
-                  %(event_code)s, %(risk_type)s, %(risk_score)s, %(risk_level)s,
-                  %(reason)s, 'deny', 'pending', %(decision_id)s, %(now)s, %(now)s
-                ) ON CONFLICT (event_code) DO NOTHING
-                """,
-                {
-                    "event_code": f"RISK-{error.request_id}",
-                    "risk_type": error.code.lower(),
-                    "risk_score": error.risk_score,
-                    "risk_level": risk_level(error.risk_score),
-                    "reason": error.message,
-                    "decision_id": row["id"],
-                    "now": now,
-                },
-            )
 
 
 def runtime_summary() -> dict[str, Any]:
@@ -2953,119 +3170,10 @@ def runtime_summary() -> dict[str, Any]:
           (SELECT count(*) FROM security_api_resources WHERE api_status = 'enabled' AND publish_status = 'success') AS apis,
           (SELECT count(*) FROM eco_resource_security_policies WHERE policy_kind = 'access_policy' AND policy_status = 'enabled' AND publish_status = 'success') AS policies,
           (SELECT count(*) FROM security_access_subjects WHERE subject_status = 'enabled') AS subjects,
-          (SELECT count(*) FROM security_policy_decision_logs) AS calls,
-          (SELECT count(*) FROM security_risk_events WHERE event_status <> 'closed') AS risks
+          (SELECT count(*) FROM security_policy_decision_logs) AS calls
         """
     ) or {}
     return {key: int(value or 0) for key, value in row.items()}
-
-
-def ensure_behavior_baseline_unique_index() -> None:
-    duplicate = fetch_one(
-        """
-        SELECT subject_id, api_resource_id, count(*) AS duplicate_count
-        FROM security_behavior_baselines
-        GROUP BY subject_id, api_resource_id
-        HAVING count(*) > 1
-        LIMIT 1
-        """
-    )
-    if duplicate:
-        raise ValueError("存在重复的主体 + API 行为基线，请先合并历史数据")
-    execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS security_behavior_baselines_subject_api_unique
-        ON security_behavior_baselines (subject_id, api_resource_id)
-        """
-    )
-
-
-def upsert_behavior_baseline(subject_id: int, api_id: int, values: dict[str, Any]) -> dict[str, Any]:
-    ensure_behavior_baseline_unique_index()
-    subject = fetch_one(
-        "SELECT id, subject_code FROM security_access_subjects WHERE id=%(id)s LIMIT 1",
-        {"id": subject_id},
-    )
-    api = fetch_one(
-        "SELECT id, api_code FROM security_api_resources WHERE id=%(id)s LIMIT 1",
-        {"id": api_id},
-    )
-    if not subject or not api:
-        raise LookupError("访问主体或 API 不存在")
-
-    def non_negative_number(name: str) -> float:
-        value = values.get(name, 0)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) < 0:
-            raise ValueError(f"{name} 必须是大于等于 0 的数值")
-        return float(value)
-
-    def required_time(name: str) -> datetime:
-        value = str(values.get(name) or "").strip().replace("Z", "+00:00")
-        try:
-            parsed = datetime.fromisoformat(value)
-        except ValueError as error:
-            raise ValueError(f"{name} 格式不正确") from error
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-    sample_from = required_time("sample_from")
-    sample_to = required_time("sample_to")
-    if sample_to <= sample_from:
-        raise ValueError("样本结束时间必须晚于开始时间")
-    sample_count = values.get("sample_count", 0)
-    if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count < 0:
-        raise ValueError("sample_count 必须是大于等于 0 的整数")
-    baseline_status = str(values.get("baseline_status") or "draft")
-    if baseline_status not in {"draft", "enabled", "disabled"}:
-        raise ValueError("行为基线状态不正确")
-
-    now = datetime.now(timezone.utc)
-    subject_token = re.sub(r"[^A-Za-z0-9_-]+", "-", str(subject["subject_code"])).strip("-")
-    api_token = re.sub(r"[^A-Za-z0-9_-]+", "-", str(api["api_code"])).strip("-")
-    baseline_code = f"BASE-{subject_token}-{api_token}"[:200]
-    row = fetch_one(
-        """
-        INSERT INTO security_behavior_baselines (
-          baseline_code, subject_id, api_resource_id, sample_from, sample_to,
-          sample_count, frequency_avg, frequency_stddev, query_days_avg,
-          query_days_stddev, rows_avg, rows_stddev, normal_time_ranges_json,
-          failure_avg, baseline_version, baseline_status, generated_at,
-          "createdAt", "updatedAt"
-        ) VALUES (
-          %(baseline_code)s, %(subject_id)s, %(api_id)s, %(sample_from)s, %(sample_to)s,
-          %(sample_count)s, %(frequency_avg)s, %(frequency_stddev)s, %(query_days_avg)s,
-          %(query_days_stddev)s, %(rows_avg)s, %(rows_stddev)s, '[]'::jsonb,
-          %(failure_avg)s, 1, %(baseline_status)s, %(now)s, %(now)s, %(now)s
-        )
-        ON CONFLICT (subject_id, api_resource_id) DO UPDATE SET
-          sample_from=EXCLUDED.sample_from, sample_to=EXCLUDED.sample_to,
-          sample_count=EXCLUDED.sample_count, frequency_avg=EXCLUDED.frequency_avg,
-          frequency_stddev=EXCLUDED.frequency_stddev, query_days_avg=EXCLUDED.query_days_avg,
-          query_days_stddev=EXCLUDED.query_days_stddev, rows_avg=EXCLUDED.rows_avg,
-          rows_stddev=EXCLUDED.rows_stddev, failure_avg=EXCLUDED.failure_avg,
-          baseline_version=security_behavior_baselines.baseline_version + 1,
-          baseline_status=EXCLUDED.baseline_status, generated_at=EXCLUDED.generated_at,
-          "updatedAt"=EXCLUDED."updatedAt"
-        RETURNING id, baseline_code, baseline_version, baseline_status, generated_at
-        """,
-        {
-            "baseline_code": baseline_code,
-            "subject_id": subject_id,
-            "api_id": api_id,
-            "sample_from": sample_from,
-            "sample_to": sample_to,
-            "sample_count": sample_count,
-            "frequency_avg": non_negative_number("frequency_avg"),
-            "frequency_stddev": non_negative_number("frequency_stddev"),
-            "query_days_avg": non_negative_number("query_days_avg"),
-            "query_days_stddev": non_negative_number("query_days_stddev"),
-            "rows_avg": non_negative_number("rows_avg"),
-            "rows_stddev": non_negative_number("rows_stddev"),
-            "failure_avg": non_negative_number("failure_avg"),
-            "baseline_status": baseline_status,
-            "now": now,
-        },
-    )
-    return row or {}
 
 
 SUPPORTED_ORCHESTRATOR_PATHS = {
@@ -3254,33 +3362,26 @@ def publish_policy(policy_id: int) -> dict[str, Any]:
     )
     if not policy:
         raise LookupError("访问策略不存在")
-    grouped_scope = str(policy.get("access_scope") or "resource") == "label_group"
     errors = []
     for field, label in [
         ("policy_code", "策略编码"),
         ("scenario", "使用场景"),
+        ("resource_id", "数据资源"),
         ("subject_id", "访问主体"),
+        ("api_resource_id", "API 资源"),
         ("output_mode", "输出模式"),
     ]:
         if not policy.get(field):
             errors.append(f"{label}不能为空")
-    if not grouped_scope:
-        if not policy.get("resource_id"):
-            errors.append("数据资源不能为空")
-        if not policy.get("api_resource_id"):
-            errors.append("API 资源不能为空")
     if policy.get("subject_status") != "enabled":
         errors.append("访问主体未启用")
-    if not grouped_scope and (policy.get("api_status") != "enabled" or policy.get("api_publish_status") != "success"):
+    if policy.get("api_status") != "enabled" or policy.get("api_publish_status") != "success":
         errors.append("API 资源尚未发布")
     allowed_api_codes = {str(item).strip().upper() for item in _json_list(policy.get("allowed_api_codes_json"))}
     if not allowed_api_codes:
         errors.append("访问主体的 API 授权清单不能为空")
-    elif not grouped_scope and "*" not in allowed_api_codes and str(policy.get("api_code") or "").strip().upper() not in allowed_api_codes:
+    elif "*" not in allowed_api_codes and str(policy.get("api_code") or "").strip().upper() not in allowed_api_codes:
         errors.append("访问主体尚未在 API 授权清单中包含当前 API")
-    selector = policy_label_selector(policy) if grouped_scope else {}
-    if grouped_scope and not any(policy_selector_conditions(selector)):
-        errors.append("标签组合策略至少需要一个分类、分级、防护层或标签条件")
     if int(policy.get("max_requests_per_minute") or 0) <= 0:
         errors.append("每分钟请求上限必须大于 0")
     if not 1 <= int(policy.get("max_query_days") or 0) <= 31:
@@ -3317,25 +3418,8 @@ def publish_policy(policy_id: int) -> dict[str, Any]:
         raise ValueError("；".join(errors))
     version = int(policy.get("policy_version") or 0) + 1
     config_version = f"runtime-v{version}-{now.strftime('%Y%m%d%H%M%S')}"
-    if grouped_scope:
-        selected_tags = set(_normalized_tags(selector.get("resourceTags")))
-        selected_levels = {str(item).lower() for item in _json_list(selector.get("protectionLevels"))}
-        constraints = {
-            "aggregateOnly": "l1" in selected_levels or "仅聚合" in selected_tags,
-            "encryptedOnly": "l3" in selected_levels or "仅密态" in selected_tags,
-            "exportForbidden": "禁止导出" in selected_tags,
-            "maskedFields": [],
-        }
-        snapshot = {
-            "version": config_version,
-            "scope": "label_group",
-            "selector": selector,
-            "matchedLabels": list(selector.get("resourceTags") or []),
-            "hardConstraints": constraints,
-        }
-    else:
-        snapshot = build_policy_runtime_snapshot(policy, config_version)
-        constraints = _json_object(snapshot.get("hardConstraints"))
+    snapshot = build_policy_runtime_snapshot(policy, config_version)
+    constraints = _json_object(snapshot.get("hardConstraints"))
     output_mode = str(policy.get("output_mode") or "detail")
     if constraints.get("aggregateOnly") and output_mode != "aggregate":
         errors.append("当前数据资源标签要求访问策略仅输出聚合结果")

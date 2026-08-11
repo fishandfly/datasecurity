@@ -15,14 +15,14 @@ test('资源列表卡片隐藏缺失属性并合并安全标注提示', () => {
   assert.doesNotMatch(pageSource, /字段监督摘要/)
 })
 
-test('资源列表卡片聚合 API、接入、访问、同态和预警运行统计', () => {
+test('资源列表卡片聚合 API、接入、访问、同态和日志运行统计', () => {
   assert.match(pageSource, /useResourceSecuritySummaries\(true\)/)
-  assert.match(pageSource, /label: 'API'[\s\S]*label: '接入'[\s\S]*label: '访问'[\s\S]*label: '同态'[\s\S]*label: '预警'/)
+  assert.match(pageSource, /label: 'API'[\s\S]*label: '接入'[\s\S]*label: '访问'[\s\S]*label: '同态'[\s\S]*label: '日志'/)
   assert.match(pageSource, /summary\.publishedApiCount/)
   assert.match(pageSource, /summary\.ingestFailureCount/)
   assert.match(pageSource, /summary\.deniedRequestCount/)
   assert.match(pageSource, /summary\.completedHomomorphicTaskCount/)
-  assert.match(pageSource, /summary\.pendingRiskCount/)
+  assert.match(pageSource, /summary\.warningCount/)
 })
 
 test('资源列表卡片展示有上限的分类标签', () => {

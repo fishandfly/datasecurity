@@ -22,7 +22,6 @@ test('实时监控数据来自真实后台记录并支持时间窗口', () => {
   assert.match(monitorSource, /listSecurityV3Records\('security_policy_decision_logs'/)
   assert.match(monitorSource, /listSecurityV3Records\('security_ingest_logs'/)
   assert.match(monitorSource, /listSecurityV3Records\('security_confidential_tasks'/)
-  assert.match(monitorSource, /listSecurityV3Records\('security_risk_events'/)
   assert.match(monitorSource, /windowHours <= 0/)
   assert.match(monitorSource, /requested_at: \{ \$gte: since \}/)
   assert.match(monitorSource, /listSecurityV3Records\('security_ingest_logs', \{ sort: \['-started_at'\] \}\)/)
@@ -33,7 +32,7 @@ test('实时监控数据来自真实后台记录并支持时间窗口', () => {
 })
 
 test('KPI 覆盖接入、策略、密态、执行与风险', () => {
-  for (const label of ['数据源（活动）', '接入校验失败', '资源（启用）', '已发布访问策略', '密态任务已完成', '密态任务失败', '窗口放行', '窗口拒绝', '待处置风险']) {
+  for (const label of ['数据源（活动）', '接入校验失败', '资源（启用）', '已发布访问策略', '密态任务已完成', '密态任务失败', '窗口放行', '窗口拒绝']) {
     assert.ok(monitorSource.includes(`label: '${label}'`), `缺少 KPI 标签 ${label}`)
   }
 })

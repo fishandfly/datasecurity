@@ -1,4 +1,5 @@
 import { APIClient } from '@nocobase/sdk'
+import { sanitizeSecurityValues, isDeprecatedSecurityField } from './security-field-model.mjs'
 
 const baseURL = process.env.NOCOBASE_API_BASE_URL || 'http://localhost:8196/api/'
 const account = process.env.NOCOBASE_ADMIN_ACCOUNT || 'nocobase'
@@ -29,6 +30,7 @@ async function findOne(resource, filter, of) {
 }
 
 async function upsert(collection, filter, values) {
+  values = sanitizeSecurityValues(collection, values)
   const existing = await findOne(collection, filter)
   if (existing?.id != null) {
     await client.resource(collection).update({ filterByTk: existing.id, values })
@@ -56,7 +58,7 @@ const field = {
     return { name, type: 'bigInt', interface: 'integer', description: options.description || description(title, '大数量运行统计和审计'), uiSchema: { type: 'number', title, 'x-component': 'InputNumber' }, ...options }
   },
   number(name, title, options = {}) {
-    return { name, type: 'double', interface: 'number', description: options.description || description(title, '行为基线计算和风险判断'), uiSchema: { type: 'number', title, 'x-component': 'InputNumber' }, ...options }
+    return { name, type: 'double', interface: 'number', description: options.description || description(title, '策略阈值、运行统计和审计'), uiSchema: { type: 'number', title, 'x-component': 'InputNumber' }, ...options }
   },
   bool(name, title, options = {}) {
     return { name, type: 'boolean', interface: 'checkbox', description: options.description || description(title, '功能能力和安全边界控制'), uiSchema: { type: 'boolean', title, 'x-component': 'Checkbox' }, ...options }
@@ -104,7 +106,6 @@ const dictionarySpecs = [
   ['protection_level', '防护层', [['l1', '普通共享层'], ['l2', '内部受控层'], ['l3', '跨域密态层']]],
   ['resource_status', '资源状态', [['draft', '草稿'], ['enabled', '启用'], ['disabled', '停用']]],
   ['security_level', '安全等级', [['normal', '普通'], ['internal', '内部'], ['sensitive', '敏感'], ['important', '重要'], ['core', '核心']]],
-  ['sensitivity_type', '敏感类型', [['identifier', '标识符'], ['operation_metric', '运行指标'], ['ordinary', '普通字段']]],
   ['desensitization_mode', '脱敏方式', [['none', '无'], ['mask', '掩码'], ['hash', '散列'], ['tokenize', '标记化']]],
   ['api_access_mode', 'API 接入模式', [['direct', '直接纳管'], ['develop', '数据库服务化'], ['orchestrate', '编排增强']]],
   ['api_status', 'API 状态', [['draft', '草稿'], ['published', '已发布'], ['disabled', '停用']]],
@@ -118,12 +119,8 @@ const dictionarySpecs = [
   ['policy_kind', '策略类型', [['resource_profile', '资源档案'], ['access_policy', '访问策略']]],
   ['output_mode', '输出模式', [['detail', '明细'], ['masked', '脱敏'], ['aggregate', '聚合'], ['encrypted', '密态']]],
   ['policy_status', '策略状态', [['draft', '草稿'], ['enabled', '启用'], ['disabled', '停用']]],
-  ['baseline_status', '基线状态', [['draft', '草稿'], ['enabled', '启用'], ['disabled', '停用']]],
   ['decision_result', '决策结果', [['allow', '放行'], ['limit', '限制'], ['deny', '拒绝']]],
   ['risk_level', '风险级别', [['normal', '正常'], ['notice', '提示'], ['medium', '中风险'], ['high', '高风险'], ['critical', '严重']]],
-  ['risk_type', '风险类型', [['unauthorized', '未授权'], ['high_frequency', '高频'], ['off_hours', '非工作时间'], ['oversized_span', '超跨度'], ['oversized_rows', '超数据量']]],
-  ['risk_action', '风险处置', [['record', '记录'], ['limit', '限制'], ['deny', '拒绝'], ['deny_alert', '拒绝并告警']]],
-  ['risk_event_status', '风险事件状态', [['pending', '待确认'], ['processing', '处理中'], ['closed', '已关闭']]],
   ['crypto_key_status', '密钥状态', [['pending_validation', '待校验'], ['enabled', '启用'], ['disabled', '停用'], ['expired', '已过期']]],
   ['crypto_operation', '同态操作', [['sum', '求和'], ['mean', '平均值']]],
   ['crypto_task_status', '同态任务状态', [['pending', '待执行'], ['running', '执行中'], ['success', '成功'], ['failed', '失败']]],
@@ -132,12 +129,11 @@ const dictionarySpecs = [
 
 const dictionaryViewNames = [
   'dict_resource_types', 'dict_update_cycles', 'dict_protection_levels', 'dict_resource_statuses',
-  'dict_security_levels', 'dict_sensitivity_types', 'dict_desensitization_modes', 'dict_api_access_modes',
+  'dict_security_levels', 'dict_desensitization_modes', 'dict_api_access_modes',
   'dict_api_statuses', 'dict_publish_statuses', 'dict_source_types', 'dict_source_statuses',
   'dict_ingest_execution_types', 'dict_ingest_results', 'dict_subject_types', 'dict_subject_statuses',
-  'dict_policy_kinds', 'dict_output_modes', 'dict_policy_statuses', 'dict_baseline_statuses',
-  'dict_decision_results', 'dict_risk_levels', 'dict_risk_types', 'dict_risk_actions',
-  'dict_risk_event_statuses', 'dict_crypto_key_statuses', 'dict_crypto_operations',
+  'dict_policy_kinds', 'dict_output_modes', 'dict_policy_statuses',
+  'dict_decision_results', 'dict_risk_levels', 'dict_crypto_key_statuses', 'dict_crypto_operations',
   'dict_crypto_task_statuses', 'dict_resource_roles',
 ]
 
@@ -208,34 +204,8 @@ const newCollections = [
       field.datetime('valid_from', '生效时间'),
       field.datetime('valid_to', '失效时间'),
       field.select('subject_status', '主体状态', commonStatus, { allowNull: false, defaultValue: 'draft' }),
-      field.integer('credential_version', '凭据版本', { allowNull: false, defaultValue: 1 }),
-      field.text('description', '主体说明'),
     ],
     relations: [],
-  },
-  {
-    name: 'security_behavior_baselines', title: '行为基线', titleField: 'baseline_code', description: '按访问主体和 API 保存调用频率、查询跨度、返回行数和失败次数的统计基线。',
-    fields: [
-      field.input('baseline_code', '基线编码', { allowNull: false, unique: true }),
-      field.datetime('sample_from', '样本开始时间', { allowNull: false }),
-      field.datetime('sample_to', '样本结束时间', { allowNull: false }),
-      field.integer('sample_count', '样本数', { allowNull: false, defaultValue: 0 }),
-      field.number('frequency_avg', '平均调用频率', { allowNull: false, defaultValue: 0 }),
-      field.number('frequency_stddev', '调用频率标准差', { allowNull: false, defaultValue: 0 }),
-      field.number('query_days_avg', '平均查询跨度', { allowNull: false, defaultValue: 0 }),
-      field.number('query_days_stddev', '查询跨度标准差', { allowNull: false, defaultValue: 0 }),
-      field.number('rows_avg', '平均返回行数', { allowNull: false, defaultValue: 0 }),
-      field.number('rows_stddev', '返回行数标准差', { allowNull: false, defaultValue: 0 }),
-      field.json('normal_time_ranges_json', '正常访问时段', { allowNull: false, defaultValue: [] }),
-      field.number('failure_avg', '平均失败次数', { allowNull: false, defaultValue: 0 }),
-      field.integer('baseline_version', '基线版本', { allowNull: false, defaultValue: 1 }),
-      field.select('baseline_status', '基线状态', commonStatus, { allowNull: false, defaultValue: 'draft' }),
-      field.datetime('generated_at', '生成时间', { allowNull: false }),
-    ],
-    relations: [
-      field.m2o('subject', '访问主体', 'security_access_subjects', 'subject_id', 'subject_name', { allowNull: false }),
-      field.m2o('api_resource', 'API 资源', 'security_api_resources', 'api_resource_id', 'api_name', { allowNull: false }),
-    ],
   },
   {
     name: 'security_policy_decision_logs', title: '调用与策略决策日志', titleField: 'request_id', description: '保存每次数据 API 调用、策略决策、风险分、限制和响应摘要。',
@@ -262,25 +232,6 @@ const newCollections = [
       field.m2o('subject', '访问主体', 'security_access_subjects', 'subject_id', 'subject_name'),
       field.m2o('api_resource', 'API 资源', 'security_api_resources', 'api_resource_id', 'api_name'),
       field.m2o('policy', '命中策略', 'eco_resource_security_policies', 'policy_id', 'policy_name'),
-    ],
-  },
-  {
-    name: 'security_risk_events', title: '风险事件', titleField: 'event_code', description: '保存高风险决策形成的事件、自动处置和人工确认关闭过程。',
-    fields: [
-      field.input('event_code', '事件编号', { allowNull: false, unique: true }),
-      field.select('risk_type', '风险类型', [['unauthorized', '未授权'], ['high_frequency', '高频'], ['off_hours', '非工作时间'], ['oversized_span', '查询跨度超限'], ['oversized_rows', '数量超限']], { allowNull: false }),
-      field.integer('risk_score', '风险分', { allowNull: false }),
-      field.select('risk_level', '风险级别', riskLevels, { allowNull: false }),
-      field.text('risk_reason', '风险原因', { allowNull: false }),
-      field.select('action_taken', '自动处置', [['record', '记录'], ['limit', '限制'], ['deny', '拒绝'], ['deny_alert', '拒绝并告警']], { allowNull: false }),
-      field.select('event_status', '事件状态', [['pending', '待确认'], ['processing', '处理中'], ['closed', '已关闭']], { allowNull: false, defaultValue: 'pending' }),
-      field.datetime('confirmed_at', '确认时间'),
-      field.datetime('closed_at', '关闭时间'),
-      field.text('audit_note', '处置备注'),
-    ],
-    relations: [
-      field.m2o('decision_log', '决策日志', 'security_policy_decision_logs', 'decision_log_id', 'request_id', { allowNull: false }),
-      field.m2o('owner_user', '处置人', 'users', 'owner_user_id', 'nickname'),
     ],
   },
   {
@@ -370,7 +321,6 @@ const extensions = {
   ],
   eco_resource_security_fields: [
     field.bool('output_allowed', '允许输出', { allowNull: false, defaultValue: true }),
-    field.bool('aggregation_allowed', '允许聚合', { allowNull: false, defaultValue: true }),
   ],
   security_data_sources: [
     field.json('validation_rules_json', '校验规则'),
@@ -431,6 +381,7 @@ async function ensureCollection(spec) {
 }
 
 async function ensureField(collectionName, definition) {
+  if (isDeprecatedSecurityField(collectionName, definition.name)) return
   const existing = await findOne('collections.fields', { name: definition.name }, collectionName)
   if (!existing) {
     await client.resource('collections.fields', collectionName).create({ values: definition })
@@ -561,7 +512,6 @@ async function ensureClassificationsAndTagPolicies() {
   const tagPolicies = [
     ['3.0-来源-验证数据库', 'security_data_sources', 'source_tags', 'source_type', 'validation_database', ['验证数据库'], 10],
     ['3.0-来源-已有API', 'security_data_sources', 'source_tags', 'source_type', 'existing_api', ['已有量测 API'], 20],
-    ['3.0-数据类型-量测运行指标', 'eco_resource_security_fields', 'field_tags', 'sensitivity_type', 'operation_metric', ['运行指标'], 30],
     ['3.0-敏感等级-重要', 'eco_resource_security_fields', 'field_tags', 'security_level', 'important', ['重要'], 40],
     ['3.0-敏感等级-核心', 'eco_resource_security_fields', 'field_tags', 'security_level', 'core', ['核心'], 50],
     ['3.0-共享方式-明细受控', 'eco_data_resources', 'resource_tags', 'protection_level', 'l2', ['明细受控'], 60],
@@ -661,35 +611,28 @@ async function seedData() {
     value: await findOne('jcCategoryTreeNodes', { typeCode: 'information_category', nodeCode: 'measurement-value' }),
     quality: await findOne('jcCategoryTreeNodes', { typeCode: 'information_category', nodeCode: 'measurement-quality' }),
   }
-  const securityLevelIds = Object.fromEntries(await Promise.all(['internal', 'sensitive', 'important', 'core'].map(async (value) => {
-    const item = await findOne('jcDictionaryItems', { typeCode: 'security_level', dictValue: value })
-    return [value, item?.id]
-  })))
   for (const item of (await listAll('eco_resource_security_fields')).filter((fieldItem) => [meterResource.id, aggregateResource.id].includes(fieldItem.resource_id))) {
     const code = String(item.field_code || '').toUpperCase()
-    const categoryKey = code.includes('TIME') ? 'time' : code.includes('QUALITY') ? 'quality' : item.identifier_flag ? 'identity' : 'value'
+    const categoryKey = code.includes('TIME') ? 'time' : code.includes('QUALITY') ? 'quality' : 'value'
     const legacyLevel = Number.parseInt(String(item.security_level || ''), 10)
     const securityLevel = legacyLevel >= 5 ? 'core' : legacyLevel >= 4 ? 'important' : legacyLevel >= 3 ? 'sensitive' : 'internal'
-    const sensitivityType = item.identifier_flag ? 'identifier' : categoryKey === 'value' ? 'operation_metric' : 'ordinary'
     await client.resource('eco_resource_security_fields').update({ filterByTk: item.id, values: {
-      information_category_id: informationNodes[categoryKey]?.id,
+      information_category: informationNodes[categoryKey]?.nodeName || null,
       security_level: securityLevel,
-      field_security_level_id: securityLevelIds[securityLevel],
-      sensitivity_type: sensitivityType,
       field_tags: [informationNodes[categoryKey]?.nodeName, securityLevel === 'core' ? '核心' : securityLevel === 'important' ? '重要' : securityLevel === 'sensitive' ? '敏感' : '内部', item.required_desensitization ? '需脱敏' : '可受控输出'].filter(Boolean),
     } })
   }
 
   const subjectData = [
-    { subject_code: 'APP-INTERNAL-A', subject_name: '调度运行应用', subject_type: 'internal_app', organization_code: 'ORG-A', organization_name: '调控中心', credential_ref: 'secret://subjects/internal-a', allowed_api_codes_json: ['API-DIRECT-REGION-LOAD', 'API-DEVELOP-ACTIVE-POWER'], ip_whitelist_json: ['10.20.10.0/24'], subject_status: 'enabled', credential_version: 1, description: '验证本单位明细访问。' },
-    { subject_code: 'APP-INTERNAL-B', subject_name: '区域统计应用', subject_type: 'internal_app', organization_code: 'ORG-B', organization_name: '数据管理中心', credential_ref: 'secret://subjects/internal-b', allowed_api_codes_json: ['API-ORCH-REGION-HOURLY'], ip_whitelist_json: ['10.20.20.0/24'], subject_status: 'enabled', credential_version: 1, description: '验证聚合输出。' },
-    { subject_code: 'APP-EXTERNAL-C', subject_name: '跨域分析方', subject_type: 'external_party', organization_code: 'EXT-C', organization_name: '外部协作单位', credential_ref: 'secret://subjects/external-c', allowed_api_codes_json: ['API-ORCH-REGION-HOURLY'], ip_whitelist_json: ['172.18.10.10/32'], subject_status: 'enabled', credential_version: 1, description: '只允许密态输出。' },
+    { subject_code: 'APP-INTERNAL-A', subject_name: '调度运行应用', subject_type: 'internal_app', organization_code: 'ORG-A', organization_name: '调控中心', credential_ref: 'secret://subjects/internal-a', allowed_api_codes_json: ['API-DIRECT-REGION-LOAD', 'API-DEVELOP-ACTIVE-POWER'], ip_whitelist_json: ['10.20.10.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-INTERNAL-B', subject_name: '区域统计应用', subject_type: 'internal_app', organization_code: 'ORG-B', organization_name: '数据管理中心', credential_ref: 'secret://subjects/internal-b', allowed_api_codes_json: ['API-ORCH-REGION-HOURLY'], ip_whitelist_json: ['10.20.20.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-EXTERNAL-C', subject_name: '跨域分析方', subject_type: 'external_party', organization_code: 'EXT-C', organization_name: '外部协作单位', credential_ref: 'secret://subjects/external-c', allowed_api_codes_json: ['API-ORCH-REGION-HOURLY'], ip_whitelist_json: ['172.18.10.10/32'], subject_status: 'enabled' },
   ]
   const subjectIds = {}
   for (const item of subjectData) subjectIds[item.subject_code] = await upsert('security_access_subjects', { subject_code: item.subject_code }, item)
 
   const apiData = [
-    { api_code: 'API-DIRECT-REGION-LOAD', api_name: '区域负荷查询', resource_id: aggregateResource.id, data_source_id: apiSource.id, access_mode: 'direct', http_method: 'GET', upstream_url: 'http://data-provider:8090/existing-api/region-load', orchestrator_path: '', gateway_path: '/data-api/direct/region-load', protection_level: 'l1', supports_row_filter: true, supports_field_filter: false, supports_aggregate: true, supports_homomorphic: false, api_status: 'enabled', publish_version: 1, publish_status: 'success', published_at: '2026-07-11T16:00:00+08:00' },
+    { api_code: 'API-DIRECT-REGION-LOAD', api_name: '区域负荷查询', resource_id: aggregateResource.id, data_source_id: apiSource.id, access_mode: 'orchestrate', http_method: 'GET', upstream_url: '', orchestrator_path: '/internal/region-hourly', gateway_path: '/data-api/direct/region-load', protection_level: 'l1', supports_row_filter: true, supports_field_filter: false, supports_aggregate: true, supports_homomorphic: false, api_status: 'enabled', publish_version: 1, publish_status: 'success', published_at: '2026-07-11T16:00:00+08:00' },
     { api_code: 'API-DEVELOP-ACTIVE-POWER', api_name: '有功功率明细查询', resource_id: meterResource.id, data_source_id: databaseSource.id, access_mode: 'develop', http_method: 'GET', upstream_url: '', orchestrator_path: '/internal/active-power', gateway_path: '/data-api/internal/active-power', protection_level: 'l2', supports_row_filter: true, supports_field_filter: true, supports_aggregate: false, supports_homomorphic: false, api_status: 'enabled', publish_version: 1, publish_status: 'success', published_at: '2026-07-11T16:00:00+08:00' },
     { api_code: 'API-ORCH-REGION-HOURLY', api_name: '区域小时聚合查询', resource_id: meterResource.id, data_source_id: databaseSource.id, access_mode: 'orchestrate', http_method: 'GET', upstream_url: '', orchestrator_path: '/internal/region-hourly', gateway_path: '/data-api/internal/region-hourly', protection_level: 'l3', supports_row_filter: true, supports_field_filter: true, supports_aggregate: true, supports_homomorphic: true, api_status: 'enabled', publish_version: 1, publish_status: 'success', published_at: '2026-07-11T16:00:00+08:00' },
   ]
@@ -702,7 +645,6 @@ async function seedData() {
     queryRangeExceeded: { enabled: true, action: 'deny', riskScore: 60 },
     rowLimitExceeded: { enabled: true, action: 'deny', riskScore: 70 },
     scopeViolation: { enabled: true, action: 'deny', riskScore: 80 },
-    behaviorAnomaly: { enabled: true, action: 'risk', riskScore: 20 },
   }
   const policyData = [
     { policy_code: 'V3-POL-DIRECT-A', policy_name: '区域负荷直连访问策略', policy_kind: 'access_policy', resource_id: aggregateResource.id, subject_id: subjectIds['APP-INTERNAL-A'], api_resource_id: apiIds['API-DIRECT-REGION-LOAD'], scenario: 'region-load-query', source_ips_json: ['10.20.10.0/24'], allowed_time_ranges_json: [{ days: [1, 2, 3, 4, 5, 6, 7], from: '00:00', to: '23:59' }], max_requests_per_minute: 60, max_query_days: 1, max_rows: 24, organization_scope_json: ['ORG-A'], region_scope_json: ['REGION-A'], output_mode: 'aggregate', risk_threshold: 70, policy_status: 'enabled', policy_version: 1, publish_status: 'success', published_at: '2026-07-11T16:00:00+08:00', gateway_config_version: 'route-v1' },
@@ -712,18 +654,6 @@ async function seedData() {
   ]
   for (const item of policyData) await upsert('eco_resource_security_policies', { policy_code: item.policy_code }, { ...item, abnormal_access_rules_json: abnormalAccessRules })
   for (const item of await listAll('eco_resource_security_policies')) if (!item.policy_kind) await client.resource('eco_resource_security_policies').update({ filterByTk: item.id, values: { policy_kind: 'resource_profile' } })
-
-  const generatedAt = '2026-07-11T16:00:00+08:00'
-  const baselineData = [
-    ['BASE-INTERNAL-A', 'APP-INTERNAL-A', 'API-DEVELOP-ACTIVE-POWER', 24, 8, 0.2, 0.1, 320, 80, 1],
-    ['BASE-INTERNAL-B', 'APP-INTERNAL-B', 'API-ORCH-REGION-HOURLY', 12, 4, 1, 0.5, 48, 16, 1],
-    ['BASE-EXTERNAL-C', 'APP-EXTERNAL-C', 'API-ORCH-REGION-HOURLY', 2, 1, 2, 1, 4096, 512, 1],
-  ]
-  for (const item of baselineData) await upsert('security_behavior_baselines', { baseline_code: item[0] }, {
-    baseline_code: item[0], subject_id: subjectIds[item[1]], api_resource_id: apiIds[item[2]], sample_from: '2026-07-04T00:00:00+08:00', sample_to: generatedAt,
-    sample_count: 120, frequency_avg: item[3], frequency_stddev: item[4], query_days_avg: item[5], query_days_stddev: item[6], rows_avg: item[7], rows_stddev: item[8],
-    normal_time_ranges_json: [{ days: [1, 2, 3, 4, 5], from: '08:00', to: '18:00' }], failure_avg: item[9], baseline_version: 1, baseline_status: 'enabled', generated_at: generatedAt,
-  })
 
   const legacyKey = await findOne('security_crypto_keys', { key_code: 'HE-KEY-EXTERNAL-C-V1' })
   if (legacyKey && !await findOne('security_crypto_keys', { key_code: 'KEY-EXT-C-002' })) {
@@ -903,7 +833,7 @@ async function verify() {
   const coreResourceIds = coreResources.map((item) => item.id)
   const unclassifiedCoreFields = (await listAll('eco_resource_security_fields'))
     .filter((item) => coreResourceIds.includes(item.resource_id))
-    .filter((item) => !item.information_category_id || !item.field_security_level_id || !Array.isArray(item.field_tags) || item.field_tags.length < 3)
+    .filter((item) => !item.information_category || !item.classification_level || !item.security_level || !Array.isArray(item.field_tags) || item.field_tags.length < 3)
     .map((item) => `${item.resource_id}.${item.field_code}`)
   const activeDataSources = (await listAll('security_data_sources')).filter((item) => item.connection_status !== 'disabled')
   const activeResources = (await listAll('eco_data_resources')).filter((item) => item.resource_status !== 'disabled')
@@ -945,15 +875,16 @@ async function verify() {
   if (missingDictionaryTypes.length || missingDictionaryItems.length) throw new Error('3.0 字典读回验证未通过')
   if (legacyCryptoAlgorithms.length) throw new Error(`存在超出 3.0 边界的密态算法字典：${legacyCryptoAlgorithms.join(', ')}`)
   if (missingDictionaryViews.length || dictionaryViewItemMismatches.length) throw new Error('3.0 专用字典视图验证未通过')
-  if (missingCategoryNodes.length || v3TagPolicies.length !== 8 || invalidTagPolicies.length) throw new Error('3.0 分类树或标签策略验证未通过')
-  if (coreResources.length !== 2 || unclassifiedCoreResources.length || unclassifiedCoreFields.length) throw new Error('3.0 核心资源分类标签关联验证未通过')
-  if (activeDataSources.length !== 10) throw new Error(`3.1 演示数据源数量应为 10，当前 ${activeDataSources.length}`)
-  if (activeResources.length !== 16) throw new Error(`3.1 演示数据资源数量应为 16，当前 ${activeResources.length}`)
-  if (cryptoKeys.length < 3) throw new Error('3.0 最小同态密钥数量验证未通过')
-  if (unarchivedLegacyTasks.length || forbiddenTaskPayloads.length) throw new Error('2.0 历史任务归档或明文清理验证未通过')
-  if (counts.security_api_resources < 19) throw new Error(`3.1 API 档案数量应不少于 19（全新库：基线 3 + v31 档案 14 + 占位 2；存量环境含历史手工 API 时为 20），当前 ${counts.security_api_resources}`)
-  if (counts.security_access_subjects < 8) throw new Error(`3.1 访问主体数量应不少于 8，当前 ${counts.security_access_subjects}`)
-  if (counts.security_behavior_baselines < 3) throw new Error(`最小行为基线数量应不少于 3，当前 ${counts.security_behavior_baselines}`)
+  if (!schemaOnly) {
+    if (missingCategoryNodes.length || v3TagPolicies.length !== 8 || invalidTagPolicies.length) throw new Error('3.0 分类树或标签策略验证未通过')
+    if (coreResources.length !== 2 || unclassifiedCoreResources.length || unclassifiedCoreFields.length) throw new Error('3.0 核心资源分类标签关联验证未通过')
+    if (activeDataSources.length !== 10) throw new Error(`3.1 演示数据源数量应为 10，当前 ${activeDataSources.length}`)
+    if (activeResources.length !== 16) throw new Error(`3.1 演示数据资源数量应为 16，当前 ${activeResources.length}`)
+    if (cryptoKeys.length < 3) throw new Error('3.0 最小同态密钥数量验证未通过')
+    if (unarchivedLegacyTasks.length || forbiddenTaskPayloads.length) throw new Error('2.0 历史任务归档或明文清理验证未通过')
+    if (counts.security_api_resources < 19) throw new Error(`3.1 API 档案数量应不少于 19（全新库：基线 3 + v31 档案 14 + 占位 2；存量环境含历史手工 API 时为 20），当前 ${counts.security_api_resources}`)
+    if (counts.security_access_subjects < 8) throw new Error(`3.1 访问主体数量应不少于 8，当前 ${counts.security_access_subjects}`)
+  }
 }
 
 async function main() {
@@ -969,7 +900,7 @@ async function main() {
   if (schemaOnly) {
     console.log('[5/7] schema-only 模式：跳过演示数据写入')
   } else {
-    console.log('[5/7] 初始化 API、主体、策略、基线和密钥元数据')
+    console.log('[5/7] 初始化 API、主体、动态策略和密钥元数据')
     await seedData()
   }
   console.log('[6/7] 重新执行字段元数据审计')

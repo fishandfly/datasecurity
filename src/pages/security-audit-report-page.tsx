@@ -170,7 +170,7 @@ export function SecurityAuditReportPage() {
           </div>
           {[
             ['审计日志证据', 42],
-            ['风险事件分析', 26],
+            ['拒绝访问分析', 26],
             ['链路追踪图谱', 18],
             ['整改建议', 14],
           ].map(([label, value]) => (

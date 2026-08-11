@@ -11,7 +11,6 @@ import {
   type CatalogCategoryTreeNode,
 } from '../lib/catalog-category-tree'
 import { appendEmbedToPath, readEmbedMode } from '../lib/embed-mode'
-import { getCatalogResourceTypeFilterId } from '../lib/catalog-resource-type'
 import { useSecurityGovernancePolicies } from '../lib/nocobase-security-governance'
 import { useSecurityDataSources } from '../lib/nocobase-security-runtime'
 import { usePortalContext } from '../lib/portal-context'
@@ -45,15 +44,14 @@ function hasSecurityCardValue(value: string) {
   return !EMPTY_SECURITY_CARD_VALUES.has(value.trim())
 }
 
-function isDatabaseTableResource(item: SecurityGovernanceJoinedItem) {
+function isSecurityManagedResource(item: SecurityGovernanceJoinedItem) {
   const combinedText = normalizeTypeText(`${item.serviceTypeId} ${item.serviceType} ${item.name} ${item.summary}`)
 
   if (/文档|文件|附件|知识|报告|制度|规范|标准|PDF|DOC|XLS/i.test(combinedText)) {
     return false
   }
 
-  const catalogTypeId = getCatalogResourceTypeFilterId(item)
-  return catalogTypeId !== 'spatial-resource' && catalogTypeId !== 'data-api'
+  return !item.mapPreview
 }
 
 function mapTreeCounts(tree: CatalogCategoryTreeNode[], counts: Map<string, number>): CatalogCategoryTreeNode[] {
@@ -259,7 +257,7 @@ export function SecurityGovernancePage() {
     [catalogItems, securityPolicies],
   )
   const typedGovernanceItems = useMemo(
-    () => governanceItems.filter(isDatabaseTableResource),
+    () => governanceItems.filter(isSecurityManagedResource),
     [governanceItems],
   )
 
@@ -553,11 +551,11 @@ export function SecurityGovernancePage() {
                         },
                         {
                           key: 'warning',
-                          label: '预警',
+                          label: '日志',
                           value: `${summary.warningCount} 项`,
-                          detail: `风险事件 ${summary.riskEventCount} · 待处置 ${summary.pendingRiskCount}`,
+                          detail: `拒绝访问 ${summary.deniedRequestCount} · 异常运行 ${summary.warningCount}`,
                           icon: Activity,
-                          path: '/security-governance/risks/events',
+                          path: '/security-governance/logs',
                           tone: summary.warningCount > 0 ? 'text-[var(--status-danger-text)] bg-[var(--status-danger-bg)]' : 'text-[var(--status-success-text)] bg-[var(--status-success-bg)]',
                         },
                       ]

@@ -34,7 +34,7 @@ function isPrimaryNavigationActive(pathname: string, target: string, isActive: b
   if (target === '/security-governance/resources/catalog') {
     return pathname === target || /^\/security-governance\/resources\/(?!apis(?:\/|$))/.test(pathname)
   }
-  if (target === '/security-governance/risks/events') return pathname.startsWith('/security-governance/risks')
+  if (target === '/security-governance/logs') return pathname === target || pathname.startsWith('/security-governance/risks')
   if (target === '/security-governance/components') {
     return pathname === target || componentConfigPrefixes.some((prefix) => pathname.startsWith(prefix))
   }

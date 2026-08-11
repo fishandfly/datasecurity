@@ -181,7 +181,6 @@ export function ResourceHomomorphicPanel({ resourceId, resourceCode, canManage }
         同态任务只配置真实执行所需信息：外部访问方、支持同态的已发布 API、计算字段、数据范围、时间窗口、求和/平均操作、算法和有效密钥版本。任务配置不保存私钥、Secret 或原始明文值。
       </div>
       <SecurityV3CollectionPage config={config} embedded />
-      <ResourceHomomorphicLogs resourceId={resourceId} />
     </div>
   )
 }

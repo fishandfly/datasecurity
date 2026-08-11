@@ -1,10 +1,20 @@
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from app.runtime import RuntimeContext, RuntimeDenied, authorize, load_policy, load_subject_by_api_key, record_allowed
+from app.runtime import (
+    RuntimeContext,
+    RuntimeDenied,
+    authorize,
+    execute_data_api,
+    load_policy,
+    load_subject_by_api_key,
+    record_allowed,
+    runtime_trace,
+)
 
 
 class QueryParams:
@@ -56,7 +66,11 @@ def policy():
 
 
 def authorize_with_policy(test_policy, query=None, frequency=1):
-    api = {"id": 9, "api_code": "API-RESOURCE-9", "runtime_config_json": {"fieldMap": {"VALUE": "value"}}}
+    api = {
+        "id": 9,
+        "api_code": "API-RESOURCE-9",
+        "runtime_config_json": {"fieldMap": {"VALUE": "value"}, "defaultFields": ["VALUE"]},
+    }
     with patch("app.runtime.load_api", return_value=api), \
          patch("app.runtime.load_subject_by_api_key", return_value=subject(["API-RESOURCE-9"])), \
          patch("app.runtime.load_policy", return_value=test_policy), \
@@ -183,59 +197,6 @@ def test_allow_and_disabled_rules_do_not_add_risk(rule):
     assert context.risk_score == 0
 
 
-def test_behavior_anomaly_uses_configured_risk_score():
-    test_policy = policy() | {
-        "risk_threshold": 20,
-        "frequency_avg": 1,
-        "frequency_stddev": 1,
-        "query_days_avg": 0,
-        "query_days_stddev": 1,
-        "rows_avg": 0,
-        "rows_stddev": 1,
-        "abnormal_access_rules_json": {
-            "behaviorAnomaly": {"enabled": True, "action": "risk", "riskScore": 20},
-        },
-    }
-    with pytest.raises(RuntimeDenied) as denied:
-        authorize_with_policy(test_policy, frequency=4)
-
-    assert denied.value.code == "RISK_REJECTED"
-    assert denied.value.risk_score == 20
-
-
-def test_sensitive_label_snapshot_amplifies_behavior_risk_and_explains_decision():
-    test_policy = policy() | {
-        "risk_threshold": 40,
-        "frequency_avg": 1,
-        "frequency_stddev": 1,
-        "query_days_avg": 0,
-        "query_days_stddev": 1,
-        "rows_avg": 0,
-        "rows_stddev": 1,
-        "policy_detail_json": {
-            "runtimeSnapshot": {
-                "version": "runtime-v3",
-                "sensitivity": "important",
-                "riskMultiplier": 1.5,
-                "matchedLabels": ["重要数据", "明细受控"],
-                "hardConstraints": {},
-            },
-        },
-        "abnormal_access_rules_json": {
-            "behaviorAnomaly": {"enabled": True, "action": "risk", "riskScore": 20},
-        },
-    }
-
-    context = authorize_with_policy(test_policy, frequency=4)
-
-    assert context.risk_score == 30
-    assert context.matched_labels == ("重要数据", "明细受控")
-    assert context.label_snapshot_version == "runtime-v3"
-    assert context.risk_factors[0]["code"] == "behaviorAnomaly"
-    assert context.risk_factors[0]["score"] == 30
-    assert "1.5" in context.risk_factors[0]["detail"]
-
-
 def test_aggregate_only_label_constraint_rejects_detail_policy():
     test_policy = policy() | {
         "policy_detail_json": {
@@ -273,6 +234,70 @@ def test_masked_field_label_constraint_rejects_plain_detail_request():
     assert denied.value.risk_factors[0]["code"] == "maskedFieldDetail"
 
 
+def test_l2_default_fields_cannot_bypass_masking_constraint():
+    test_policy = policy() | {
+        "policy_detail_json": {
+            "runtimeSnapshot": {
+                "version": "runtime-l2",
+                "protectionLevel": "l2",
+                "matchedLabels": ["明细受控", "需脱敏"],
+                "hardConstraints": {"maskedFields": ["VALUE"]},
+            },
+        },
+    }
+
+    with pytest.raises(RuntimeDenied) as denied:
+        authorize_with_policy(test_policy)
+
+    assert denied.value.code == "TAG_CONSTRAINT_VIOLATION"
+    assert "TAG_ENRICH" in denied.value.security_actions
+    assert "CLASSIFY" in denied.value.security_actions
+    assert "ISOLATE_L2" in denied.value.security_actions
+
+
+def test_l3_policy_requires_declared_homomorphic_executor():
+    test_policy = policy() | {
+        "output_mode": "encrypted",
+        "policy_detail_json": {
+            "runtimeSnapshot": {
+                "version": "runtime-l3",
+                "protectionLevel": "l3",
+                "matchedLabels": ["仅密态"],
+                "hardConstraints": {"encryptedOnly": True},
+            },
+        },
+    }
+
+    with pytest.raises(RuntimeDenied) as denied:
+        authorize_with_policy(test_policy)
+
+    assert denied.value.code == "TAG_CONSTRAINT_VIOLATION"
+    assert denied.value.risk_factors[0]["code"] == "homomorphicCapability"
+    assert "ROUTE_TO_HE_COMPUTE" in denied.value.security_actions
+
+
+def test_direct_api_isolated_when_it_cannot_execute_controlled_output():
+    context = RuntimeContext(
+        request_id="REQ-DIRECT-ISOLATION",
+        api={"id": 9, "access_mode": "direct", "orchestrator_path": "", "upstream_url": "http://example.invalid"},
+        subject={"id": 2},
+        policy={"id": 12, "output_mode": "masked"},
+        risk_score=0,
+        client_ip="10.20.10.8",
+        query_days=0,
+        requested_rows=10,
+        matched_labels=("需脱敏",),
+        security_actions=("TAG_ENRICH", "CLASSIFY", "ISOLATE_L2", "POLICY_MATCH", "MASK", "AUDIT"),
+    )
+
+    with pytest.raises(RuntimeDenied) as denied:
+        asyncio.run(execute_data_api(SimpleNamespace(headers={}, method="GET", query_params=QueryParams()), context))
+
+    assert denied.value.code == "TAG_CONSTRAINT_VIOLATION"
+    assert denied.value.risk_factors[0]["code"] == "directRouteIsolation"
+    assert denied.value.security_actions[-1] == "DENY"
+
+
 def test_allowed_decision_log_persists_label_and_risk_evidence():
     context = RuntimeContext(
         request_id="REQ-EVIDENCE",
@@ -291,8 +316,9 @@ def test_allowed_decision_log_persists_label_and_risk_evidence():
         query_days=1,
         requested_rows=10,
         matched_labels=("重要数据", "需脱敏"),
-        risk_factors=({"code": "behaviorAnomaly", "label": "行为基线偏离", "score": 30},),
+        risk_factors=({"code": "identifierField", "label": "直接标识符", "score": 15},),
         label_snapshot_version="runtime-v6",
+        security_actions=("TAG_ENRICH", "CLASSIFY", "ISOLATE_L2", "POLICY_MATCH", "MASK", "AUDIT"),
     )
 
     with patch("app.runtime.execute") as execute:
@@ -302,59 +328,61 @@ def test_allowed_decision_log_persists_label_and_risk_evidence():
     assert "applied_limits_json" in statement
     evidence = json.loads(parameters["evidence"])
     assert evidence["matchedLabels"] == ["重要数据", "需脱敏"]
-    assert evidence["riskFactors"][0]["score"] == 30
+    assert evidence["riskFactors"][0]["score"] == 15
     assert evidence["hardConstraints"]["maskedFields"] == ["POINT_ID"]
+    assert evidence["securityActions"][-1] == "AUDIT"
+    assert evidence["classification"]["protectionLevel"] == ""
+    assert [step["stage"] for step in evidence["runtimeTrace"]] == [
+        "label_enrichment",
+        "classification",
+        "dynamic_policy",
+        "security_action",
+        "audit",
+    ]
+    assert evidence["runtimeTrace"][3]["outcome"] == "MASK"
+    assert evidence["runtimeTrace"][4]["status"] == "audit_recorded"
 
 
-def test_exact_resource_policy_takes_precedence_over_matching_label_policy():
-    grouped = policy() | {
-        "id": 20,
-        "api_resource_id": None,
-        "access_scope": "label_group",
-        "requested_resource_id": 8,
-        "security_tags": ["明细受控"],
+def test_runtime_trace_records_high_risk_denial_without_risk_event():
+    trace = runtime_trace(
+        policy={"id": 12, "policy_code": "POL-12", "policy_version": 3, "output_mode": "detail"},
+        snapshot={
+            "version": "runtime-v6",
+            "matchedLabels": ["重要数据"],
+            "protectionLevel": "L3",
+            "sensitivity": "high",
+        },
+        matched_labels=("重要数据",),
+        actions=("TAG_ENRICH", "CLASSIFY", "ISOLATE_L3", "POLICY_MATCH", "DENY", "AUDIT"),
+        decision="deny",
+        risk_score=90,
+        reason_code="RISK_REJECTED",
+    )
+
+    assert trace[0]["status"] == "completed"
+    assert trace[1]["protectionLevel"] == "L3"
+    assert trace[2]["reasonCode"] == "RISK_REJECTED"
+    assert trace[3]["outcome"] == "DENY"
+    assert trace[4]["status"] == "audit_recorded"
+    assert "riskEventCreated" not in trace[4]
+
+
+def test_load_policy_uses_exact_resource_and_api_match():
+    exact = policy() | {
+        "id": 12,
+        "resource_id": 8,
+        "api_resource_id": 9,
+        "policy_code": "POL-12",
+        "policy_version": 2,
     }
-    exact = policy() | {"id": 12, "api_resource_id": 9, "requested_resource_id": 8}
-    with patch("app.runtime.fetch_all", return_value=[grouped, exact]), \
-         patch("app.runtime.build_resource_label_snapshot") as build_snapshot:
+    with patch("app.runtime.fetch_all", return_value=[exact]):
         selected = load_policy(2, 9, "resource-data-query")
 
     assert selected["id"] == 12
-    build_snapshot.assert_not_called()
+    assert selected["_policyEvaluations"][0]["result"] == "passed"
 
 
-def test_matching_label_policies_use_priority_then_specificity():
-    base_group = policy() | {
-        "api_resource_id": None,
-        "access_scope": "label_group",
-        "requested_resource_id": 8,
-        "gateway_config_version": "runtime-v7",
-    }
-    general = base_group | {
-        "id": 20,
-        "policy_version": 3,
-        "security_tags": ["明细受控"],
-        "security_profile_json": {"priority": 100, "match": "all"},
-    }
-    important = base_group | {
-        "id": 21,
-        "policy_version": 2,
-        "security_tags": ["明细受控", "重要数据"],
-        "security_profile_json": {"priority": 100, "match": "all", "protectionLevels": ["l2"]},
-    }
-    snapshot = {
-        "version": "resource-live",
-        "protectionLevel": "l2",
-        "matchedLabels": ["明细受控", "重要数据"],
-        "fieldTags": {},
-        "classification": {},
-        "hardConstraints": {},
-    }
-    with patch("app.runtime.fetch_all", return_value=[general, important]), \
-         patch("app.runtime.build_resource_label_snapshot", return_value=snapshot):
-        selected = load_policy(2, 9, "resource-data-query")
-
-    assert selected["id"] == 21
-    runtime_snapshot = selected["policy_detail_json"]["runtimeSnapshot"]
-    assert runtime_snapshot["matchedLabels"] == ["明细受控", "重要数据"]
-    assert runtime_snapshot["matchedPolicySelector"]["protectionLevels"] == ["l2"]
+def test_load_policy_returns_none_without_exact_policy():
+    grouped = policy() | {"id": 20, "resource_id": 8, "api_resource_id": None}
+    with patch("app.runtime.fetch_all", return_value=[grouped]):
+        assert load_policy(2, 9, "resource-data-query") is None

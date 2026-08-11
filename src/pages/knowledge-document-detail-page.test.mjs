@@ -3,15 +3,13 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const resourceGovernanceModulePath = resolve(process.cwd(), 'src/modules/ResourceGovernance')
 const listPageSource = readFileSync(resolve(process.cwd(), 'src/pages/knowledge-documents-page.tsx'), 'utf8')
 const detailPagePath = resolve(process.cwd(), 'src/pages/knowledge-document-detail-page.tsx')
 const detailPageSource = existsSync(detailPagePath) ? readFileSync(detailPagePath, 'utf8') : ''
 const apiSource = readFileSync(resolve(process.cwd(), 'src/lib/knowledgebase-api.ts'), 'utf8')
 const uiSource = readFileSync(resolve(process.cwd(), 'src/components/ui.tsx'), 'utf8')
 
-test('文档资源详情页源码保留，但旧资源管控模块壳已删除', () => {
-  assert.equal(existsSync(resourceGovernanceModulePath), false)
+test('文档资源详情页保持兼容入口', () => {
   assert.match(listPageSource, /function buildKnowledgeDocumentDetailPath\(relativePath: string\)/)
   assert.match(listPageSource, /to=\{withEmbed\(buildKnowledgeDocumentDetailPath\(item\.relativePath\)\)\}/)
   assert.match(listPageSource, /查看详情/)

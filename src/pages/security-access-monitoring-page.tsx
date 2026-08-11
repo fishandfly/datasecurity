@@ -77,16 +77,16 @@ function buildAccessMonitors(items: SecurityDataSourceRecord[]): AccessMonitorRe
   return items.map((item) => {
     const status: GatewayStatus = item.status === 'connected' ? '运行中' : item.status === 'exception' ? '告警' : '离线'
     const sourceScope = resolveSourceScope(item)
-    const risk: MonitorRisk = status === '告警' || item.sensitivity === 'highly_sensitive'
+    const risk: MonitorRisk = status === '告警' || item.monitor.blockedCount > 0
       ? '高'
-      : item.sensitivity === 'sensitive' || status === '离线'
+      : status === '离线'
         ? '中'
         : '低'
     return {
       id: item.id,
       sourceName: item.name,
       sourceScope,
-      gatewayName: item.workflowKey || '未配置 Workflow',
+      gatewayName: '受控接入网关',
       status,
       risk,
       ingestRate: item.monitor.ingestRate,

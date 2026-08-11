@@ -361,9 +361,9 @@ function buildDistribution(events: SecurityDashboardEvent[]): SecurityDashboardD
   if (total === 0) return []
 
   const specs: Array<{ risk: SecurityDashboardRisk; label: string; color: string }> = [
-    { risk: '高', label: '高风险事件', color: '#ef4444' },
-    { risk: '中', label: '中风险事件', color: '#f59e0b' },
-    { risk: '低', label: '低风险事件', color: '#3b82f6' },
+    { risk: '高', label: '高风险访问', color: '#ef4444' },
+    { risk: '中', label: '中风险访问', color: '#f59e0b' },
+    { risk: '低', label: '低风险访问', color: '#3b82f6' },
   ]
 
   return specs

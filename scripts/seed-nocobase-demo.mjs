@@ -1,4 +1,5 @@
 import { APIClient } from '@nocobase/sdk'
+import { sanitizeSecurityValues, isDeprecatedSecurityField } from './security-field-model.mjs'
 
 const baseURL = process.env.NOCOBASE_API_BASE_URL || 'http://localhost:8196/api/'
 const account = process.env.NOCOBASE_ADMIN_ACCOUNT || 'admin@nocobase.com'
@@ -33,6 +34,7 @@ async function findOne(collection, filter) {
 }
 
 async function upsert(collection, filter, values) {
+  values = sanitizeSecurityValues(collection, values)
   try {
     const existing = await findOne(collection, filter)
     if (existing?.id != null) {
@@ -92,6 +94,7 @@ async function fieldNames(collection) {
 }
 
 async function ensureField(collection, field) {
+  if (isDeprecatedSecurityField(collection, field.name)) return
   const names = await fieldNames(collection)
   if (names.has(field.name)) return
   try {
@@ -560,8 +563,6 @@ async function ensureSchema() {
     json('allowed_api_codes_json', '授权 API 编码列表', '授权 API 编码数组'),
     json('ip_whitelist_json', 'IP 白名单', '来源 IP 白名单'),
     input('subject_status', '主体状态', 'draft、enabled 或 disabled'),
-    integer('credential_version', '凭据版本', 'API Key 版本'),
-    text('description', '主体说明', '主体用途说明'),
   ]
   for (const field of subjectFields) await ensureField('security_access_subjects', field)
 
@@ -669,7 +670,6 @@ async function ensureBaseDictionariesAndTrees() {
     ['data_subject_type', '数据主体类型', [['customer', '客户'], ['device', '设备'], ['operation', '运行']]],
     ['source_type', '数据源类型', [['yongcai20', '用采2.0'], ['dispatch_cloud', '调控云'], ['substation_monitor', '变电站集中监控'], ['distribution_automation', '配电自动化'], ['wide_area_measurement', '广域测量'], ['file_e', 'E 文件通道'], ['message_queue', '消息服务通道'], ['ems', '调度自动化'], ['tmr', '电能量计量'], ['distribution_cloud', '配电云主站'], ['cable_monitor', '输变电状态监测'], ['weather', '网格化气象'], ['hvcable', '高压电缆在线监测'], ['realtime_db', '实时库'], ['history_db', '历史库'], ['third_party_api', '第三方接口']]],
     ['connection_status', '连接状态', [['connected', '已连接'], ['unconnected', '未连接'], ['exception', '连接异常'], ['testing', '测试中'], ['disabled', '已停用']]],
-    ['sensitivity_level', '敏感度', [['public', '公开'], ['internal', '内部'], ['sensitive', '敏感'], ['highly_sensitive', '高敏感']]],
     ['compute_status', '密态任务状态', [['pending_approval', '待审批'], ['approved', '已审批'], ['running', '运行中'], ['completed', '已完成'], ['paused', '已暂停'], ['failed', '失败']]],
     ['compute_algorithm', '密态算法', [['bfv', '整数精确型'], ['ckks', '浮点近似型']]],
     ['risk_level', '风险等级', [['high', '高'], ['medium', '中'], ['low', '低'], ['normal', '正常']]],
@@ -727,19 +727,11 @@ async function ensureBaseDictionariesAndTrees() {
       rules: [{ fieldName: 'approval_required', operator: 'eq', value: 'true' }],
       tags: ['需审批'],
     },
-    {
-      title: '安全档案-禁止导出标签',
-      collectionName: 'eco_resource_security_policies',
-      fieldName: 'security_tags',
-      sort: 50,
-      rules: [{ fieldName: 'export_allowed', operator: 'eq', value: 'false' }],
-      tags: ['禁止导出'],
-    },
-    { title: '字段安全-直接标识符标签', collectionName: 'eco_resource_security_fields', fieldName: 'field_tags', sort: 60, rules: [{ fieldName: 'identifier_flag', operator: 'eq', value: 'true' }], tags: ['直接标识符'] },
-    { title: '字段安全-准标识符标签', collectionName: 'eco_resource_security_fields', fieldName: 'field_tags', sort: 70, rules: [{ fieldName: 'quasi_identifier_flag', operator: 'eq', value: 'true' }], tags: ['准标识符'] },
-    { title: '字段安全-重要字段标签', collectionName: 'eco_resource_security_fields', fieldName: 'field_tags', sort: 80, rules: [{ fieldName: 'important_field_flag', operator: 'eq', value: 'true' }], tags: ['重要字段'] },
+    { title: '字段安全-重要字段标签', collectionName: 'eco_resource_security_fields', fieldName: 'field_tags', sort: 60, rules: [{ fieldName: 'important_field_flag', operator: 'eq', value: 'true' }], tags: ['重要字段'] },
+    { title: '字段安全-脱敏字段标签', collectionName: 'eco_resource_security_fields', fieldName: 'field_tags', sort: 70, rules: [{ fieldName: 'required_desensitization', operator: 'eq', value: 'true' }], tags: ['需脱敏字段'] },
+    { title: '字段安全-核心等级标签', collectionName: 'eco_resource_security_fields', fieldName: 'field_tags', sort: 80, rules: [{ fieldName: 'security_level', operator: 'eq', value: 'core' }], tags: ['核心字段'] },
     { title: '数据源-连接异常标签', collectionName: 'security_data_sources', fieldName: 'source_tags', sort: 90, rules: [{ fieldName: 'connection_status', operator: 'eq', value: 'exception' }], tags: ['连接异常'] },
-    { title: '数据源-高敏标签', collectionName: 'security_data_sources', fieldName: 'source_tags', sort: 100, rules: [{ fieldName: 'sensitivity_level', operator: 'eq', value: 'highly_sensitive' }], tags: ['高敏数据源'] },
+    { title: '数据源-量测数据库标签', collectionName: 'security_data_sources', fieldName: 'source_tags', sort: 100, rules: [{ fieldName: 'source_type', operator: 'eq', value: 'validation_database' }], tags: ['量测数据库'] },
     { title: '密态任务-高风险标签', collectionName: 'security_confidential_tasks', fieldName: 'task_tags', sort: 110, rules: [{ fieldName: 'risk_level', operator: 'eq', value: 'high' }], tags: ['高风险任务'] },
     { title: '密态任务-执行失败标签', collectionName: 'security_confidential_tasks', fieldName: 'task_tags', sort: 120, rules: [{ fieldName: 'task_status', operator: 'eq', value: 'failed' }], tags: ['执行失败'] },
   ]
@@ -1528,7 +1520,7 @@ function dataItems(resourceCode) {
   })
 }
 
-function securityFieldRows(policyCode, resourceCode, accessScope) {
+function securityFieldRows(policyCode, resourceCode) {
   return measurementDemoSpecs[resourceCode].fields.map((field, index) => ({
     policy_code: policyCode,
     resource_code: resourceCode,
@@ -1540,20 +1532,10 @@ function securityFieldRows(policyCode, resourceCode, accessScope) {
     information_category: resourceCode === 'GRID-METER-SEC-001' ? '用户侧量测' : '电网运行量测',
     classification_level: field.securityLevel === '5级' ? '核心运行' : field.securityLevel === '4级' ? '重要运行' : '运行明细',
     security_level: field.securityLevel,
-    sensitivity_type: field.sensitivityType,
-    identifier_flag: Boolean(field.identifierFlag),
-    quasi_identifier_flag: Boolean(field.quasiIdentifierFlag),
     important_field_flag: true,
     field_tags: field.tags,
-    level_basis: field.description,
-    risk_notes: field.desensitizationMode === 'aggregate-only' ? '跨域使用仅提供受控聚合结果' : field.identifierFlag ? '设备或客户标识默认脱敏' : '按授权范围使用',
-    required_access_scope: accessScope,
     required_desensitization: Boolean(field.desensitizationMode),
-    required_desensitization_mode: field.desensitizationMode ?? '',
-    required_export_allowed: false,
-    required_export_scope: 'disabled',
-    required_api_access_allowed: field.securityLevel !== '5级',
-    required_approval_required: true,
+    output_allowed: true,
   }))
 }
 
@@ -1813,7 +1795,7 @@ async function seedBusinessData(ref) {
   }
   const sourceBlueprints = [
     {
-      sourceCode: 'SRC-YC20-001', sourceName: '用采2.0量测数据源', sourceType: 'yongcai20', sensitivityLevel: 'sensitive',
+      sourceCode: 'SRC-YC20-001', sourceName: '用采2.0量测数据源', sourceType: 'yongcai20',
       ownerDept: '计量中心', policyCode: 'POL-METER-001', resourceCode: 'GRID-METER-SEC-001',
       description: '用采 2.0 用户侧量测、日冻结与停复电事件的统一安全接入演示配置。',
       host: 'measurement-db', port: '5432', databaseName: 'measurement_data',
@@ -1822,7 +1804,7 @@ async function seedBusinessData(ref) {
       monitor: demoMonitor('GRID-METER-SEC-001', 4800, 14820000, 780, 2),
     },
     {
-      sourceCode: 'SRC-DISPATCH-001', sourceName: '调控云量测数据源', sourceType: 'dispatch_cloud', sensitivityLevel: 'highly_sensitive',
+      sourceCode: 'SRC-DISPATCH-001', sourceName: '调控云量测数据源', sourceType: 'dispatch_cloud',
       ownerDept: '调控中心', policyCode: 'POL-DISPATCH-002', resourceCode: 'GRID-DISPATCH-SEC-002',
       description: '调控云实时运行量测的统一安全接入演示配置。',
       host: 'dispatch-demo.internal', port: '1521', databaseName: 'dispatch_realtime',
@@ -1831,7 +1813,7 @@ async function seedBusinessData(ref) {
       monitor: demoMonitor('GRID-DISPATCH-SEC-002', 18500, 58600000, 86),
     },
     {
-      sourceCode: 'SRC-EMS-001', sourceName: '调度自动化量测数据源', sourceType: 'ems', sensitivityLevel: 'highly_sensitive',
+      sourceCode: 'SRC-EMS-001', sourceName: '调度自动化量测数据源', sourceType: 'ems',
       ownerDept: '调控中心', policyCode: '', resourceCode: 'GRID-LVF-VOLT-001',
       description: '低频电压、电流、功率与功率因数曲线的统一安全接入演示配置（E 文件通道）。',
       host: 'measurement-db', port: '5432', databaseName: 'measurement_data',
@@ -1840,7 +1822,7 @@ async function seedBusinessData(ref) {
       monitor: demoMonitor('GRID-LVF-VOLT-001', 9216, 29859840, 132),
     },
     {
-      sourceCode: 'SRC-STATION-001', sourceName: '新一代集控站量测数据源', sourceType: 'file_e', sensitivityLevel: 'sensitive',
+      sourceCode: 'SRC-STATION-001', sourceName: '新一代集控站量测数据源', sourceType: 'file_e',
       ownerDept: '调控中心', policyCode: '', resourceCode: '',
       description: '新一代集控站主网遥测的 E 文件接入档案（演示占位，不绑定物理演示表）。',
       host: 'station-demo.internal', port: null, databaseName: 'station_measurement',
@@ -1849,7 +1831,7 @@ async function seedBusinessData(ref) {
       monitor: null,
     },
     {
-      sourceCode: 'SRC-TMR-001', sourceName: '电能量计量量测数据源', sourceType: 'tmr', sensitivityLevel: 'highly_sensitive',
+      sourceCode: 'SRC-TMR-001', sourceName: '电能量计量量测数据源', sourceType: 'tmr',
       ownerDept: '计量中心', policyCode: '', resourceCode: 'GRID-TMR-ENERGY-010',
       description: '主网电能示值的统一安全接入演示配置（E 文件通道）。',
       host: 'measurement-db', port: '5432', databaseName: 'measurement_data',
@@ -1858,7 +1840,7 @@ async function seedBusinessData(ref) {
       monitor: demoMonitor('GRID-TMR-ENERGY-010', 512, 1671168, 96),
     },
     {
-      sourceCode: 'SRC-DISTRIBUTION-001', sourceName: '配电自动化量测数据源', sourceType: 'distribution_automation', sensitivityLevel: 'highly_sensitive',
+      sourceCode: 'SRC-DISTRIBUTION-001', sourceName: '配电自动化量测数据源', sourceType: 'distribution_automation',
       ownerDept: '配电自动化中心', policyCode: '', resourceCode: 'GRID-SWITCH-EVENT-008',
       description: '配网遥测与开关事件的统一安全接入演示配置（消息服务通道）。',
       host: 'measurement-db', port: '5432', databaseName: 'measurement_data',
@@ -1867,7 +1849,7 @@ async function seedBusinessData(ref) {
       monitor: demoMonitor('GRID-SWITCH-EVENT-008', 384, 1258291, 118, 1),
     },
     {
-      sourceCode: 'SRC-DCLOUD-001', sourceName: '配电云主站量测数据源', sourceType: 'message_queue', sensitivityLevel: 'sensitive',
+      sourceCode: 'SRC-DCLOUD-001', sourceName: '配电云主站量测数据源', sourceType: 'message_queue',
       ownerDept: '配电自动化中心', policyCode: '', resourceCode: '',
       description: '配电云主站台区遥测与停复电信号的消息服务接入档案（演示占位）。',
       host: 'dcloud-demo.internal', port: null, databaseName: 'distribution_cloud',
@@ -1876,7 +1858,7 @@ async function seedBusinessData(ref) {
       monitor: null,
     },
     {
-      sourceCode: 'SRC-CABLE-001', sourceName: '输变电状态监测量测数据源', sourceType: 'cable_monitor', sensitivityLevel: 'sensitive',
+      sourceCode: 'SRC-CABLE-001', sourceName: '输变电状态监测量测数据源', sourceType: 'cable_monitor',
       ownerDept: '设备管理部', policyCode: '', resourceCode: '',
       description: '油色谱与局放告警等状态监测量测的接入档案（演示占位）。',
       host: 'measurement-db', port: '5432', databaseName: 'measurement_data',
@@ -1885,7 +1867,7 @@ async function seedBusinessData(ref) {
       monitor: null,
     },
     {
-      sourceCode: 'SRC-WEATHER-001', sourceName: '网格化气象预测量测数据源', sourceType: 'weather', sensitivityLevel: 'internal',
+      sourceCode: 'SRC-WEATHER-001', sourceName: '网格化气象预测量测数据源', sourceType: 'weather',
       ownerDept: '设备管理部', policyCode: '', resourceCode: '',
       description: '风速、气温、降雨与导线舞动等气象量测的接入档案（演示占位）。',
       host: 'measurement-db', port: '5432', databaseName: 'measurement_data',
@@ -1894,7 +1876,7 @@ async function seedBusinessData(ref) {
       monitor: null,
     },
     {
-      sourceCode: 'SRC-HVCABLE-001', sourceName: '高压电缆在线监测量测数据源', sourceType: 'hvcable', sensitivityLevel: 'sensitive',
+      sourceCode: 'SRC-HVCABLE-001', sourceName: '高压电缆在线监测量测数据源', sourceType: 'hvcable',
       ownerDept: '设备管理部', policyCode: '', resourceCode: '',
       description: '护层接地电流、气体与通道温湿度等电缆监测量测的接入档案（演示占位）。',
       host: 'measurement-db', port: '5432', databaseName: 'measurement_data',
@@ -1910,17 +1892,14 @@ async function seedBusinessData(ref) {
       source_name: source.sourceName,
       source_type: source.sourceType,
       connection_status: 'connected',
-      sensitivity_level: source.sensitivityLevel,
       owner_user_id: 1,
       owner_dept: source.ownerDept,
-      policy_id: null,
       description: source.description,
       host: source.host,
       port: source.port || null,
       database_name: source.databaseName,
       username: 'measurement_reader',
       secret_ref: `secret://security/source/${source.sourceCode.toLowerCase()}`,
-      workflow_key: '统一安全接入校验',
       source_tags: source.tags,
       connection_options_json: source.connectionOptions,
       security_config_json: {
@@ -2451,7 +2430,7 @@ async function seedBusinessData(ref) {
     },
   ]
   const policies = policyBlueprints.map((blueprint, index) => {
-    const fieldRows = securityFieldRows(blueprint.policyCode, blueprint.resourceCode, blueprint.accessScope)
+    const fieldRows = securityFieldRows(blueprint.policyCode, blueprint.resourceCode)
     return {
       resource_id: resourceIds[blueprint.resourceCode],
       security_category_id: blueprint.securityCategoryId,
@@ -2476,13 +2455,6 @@ async function seedBusinessData(ref) {
       risk_notes: blueprint.riskNotes,
       last_reviewed_at: '2026-07-01T10:00:00+08:00',
       next_review_at: '2026-10-01',
-      access_scope: blueprint.accessScope,
-      approval_mode: blueprint.approvalMode,
-      desensitization_mode: blueprint.desensitizationMode,
-      export_allowed: false,
-      export_scope: 'disabled',
-      api_access_allowed: true,
-      api_auth_mode: blueprint.securityLevel === 'level_5' ? 'mfa-and-role' : 'jwt-and-role',
       security_tags: blueprint.tags,
       effective_from: '2026-07-01',
       effective_to: '2026-12-31',
@@ -2504,47 +2476,40 @@ async function seedBusinessData(ref) {
   }
 
   const securityFields = policyBlueprints.flatMap((blueprint) => (
-    securityFieldRows(blueprint.policyCode, blueprint.resourceCode, blueprint.accessScope)
+    securityFieldRows(blueprint.policyCode, blueprint.resourceCode)
   ))
   const fieldPolicyIds = {}
   for (const field of securityFields) {
     const { policy_code, resource_code, ...values } = field
-    const policyId = policyIds[policy_code]
-    const fieldId = await upsert('eco_resource_security_fields', { policy_id: policyId, field_code: values.field_code }, {
+    const fieldId = await upsert('eco_resource_security_fields', { resource_id: resourceIds[resource_code], field_code: values.field_code }, {
       ...values,
-      policy_id: policyId,
       resource_id: resourceIds[resource_code],
     })
     fieldPolicyIds[`${policy_code}:${values.field_code}`] = fieldId
   }
 
-  for (const source of sourceBlueprints) {
-    if (!source.policyCode || !policyIds[source.policyCode]) continue
-    await upsert('security_data_sources', { source_code: source.sourceCode }, { policy_id: policyIds[source.policyCode] })
-  }
-
   const subjectData = [
-    { subject_code: 'APP-INTERNAL-A', subject_name: '调度运行应用', subject_type: 'internal_app', organization_code: 'ORG-A', organization_name: '调控中心', credential_ref: 'secret://subjects/internal-a', allowed_api_codes_json: ['API-DIRECT-REGION-LOAD', 'API-DEVELOP-ACTIVE-POWER'], ip_whitelist_json: ['10.20.10.0/24'], subject_status: 'enabled', credential_version: 1, description: '验证本单位明细访问。' },
-    { subject_code: 'APP-INTERNAL-B', subject_name: '区域统计应用', subject_type: 'internal_app', organization_code: 'ORG-B', organization_name: '数据管理中心', credential_ref: 'secret://subjects/internal-b', allowed_api_codes_json: ['API-ORCH-REGION-HOURLY'], ip_whitelist_json: ['10.20.20.0/24'], subject_status: 'enabled', credential_version: 1, description: '验证聚合输出。' },
-    { subject_code: 'APP-EXTERNAL-C', subject_name: '跨域分析方', subject_type: 'external_party', organization_code: 'EXT-C', organization_name: '外部协作单位', credential_ref: 'secret://subjects/external-c', allowed_api_codes_json: ['API-ORCH-REGION-HOURLY'], ip_whitelist_json: ['172.18.10.10/32'], subject_status: 'enabled', credential_version: 1, description: '只允许密态输出。' },
-    { subject_code: 'APP-ONLINE-GRID', subject_name: '网上电网应用', subject_type: 'internal_app', organization_code: 'DEV-PLAN', organization_name: '发展部', credential_ref: 'secret://subjects/online-grid', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.30.0/24'], subject_status: 'enabled', credential_version: 1, description: '电网一张图与量测档案查询（客户 44 应用代表场景）。' },
-    { subject_code: 'APP-MARKETING-2', subject_name: '能源互联网营销应用', subject_type: 'internal_app', organization_code: 'SAFETY', organization_name: '安监部', credential_ref: 'secret://subjects/marketing-2', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.31.0/24'], subject_status: 'enabled', credential_version: 1, description: '营销 2.0 用户量测与日冻结应用（客户口径属安监部）。' },
-    { subject_code: 'APP-LINE-LOSS', subject_name: '一体化电量线损应用', subject_type: 'internal_app', organization_code: 'DEV-PLAN', organization_name: '发展部', credential_ref: 'secret://subjects/line-loss', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.32.0/24'], subject_status: 'enabled', credential_version: 1, description: '电量、日冻结与线损统计应用。' },
-    { subject_code: 'APP-LINE-RELATION', subject_name: '线变关系辨识应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/line-relation', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.33.0/24'], subject_status: 'enabled', credential_version: 1, description: '配网线变关系辨识模型应用。' },
-    { subject_code: 'APP-SALES-FORECAST', subject_name: '售电量预测应用', subject_type: 'internal_app', organization_code: 'MARKETING', organization_name: '营销部', credential_ref: 'secret://subjects/sales-forecast', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.34.0/24'], subject_status: 'enabled', credential_version: 1, description: '售电量预测模型应用。' },
-    { subject_code: 'APP-CREDIT-ELECTRIC', subject_name: '电力看信用应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/credit-electric', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.35.0/24'], subject_status: 'enabled', credential_version: 1, description: '电力看信用用户电量应用。' },
-    { subject_code: 'APP-DATA-GOVERN', subject_name: '数据质量核查应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/data-govern', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.36.0/24'], subject_status: 'enabled', credential_version: 1, description: '数据管理与质量核查应用。' },
-    { subject_code: 'APP-EXTERNAL-ENV', subject_name: '电力看环保对接方', subject_type: 'external_party', organization_code: 'EXT-ENV', organization_name: '省生态环境厅', credential_ref: 'secret://subjects/external-env', allowed_api_codes_json: [], ip_whitelist_json: ['198.51.100.0/24'], subject_status: 'enabled', credential_version: 1, description: '外部部门环保监测数据对接。' },
-    { subject_code: 'APP-DATA-TRANSFER', subject_name: '数据传输组件应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/data-transfer', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.40.0/24'], subject_status: 'enabled', credential_version: 1, description: '两级数据通道全量传输（客户 132 张共享表）。' },
-    { subject_code: 'APP-FULL-LINK-MONITOR', subject_name: '全链路监控应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/full-link-monitor', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.41.0/24'], subject_status: 'enabled', credential_version: 1, description: '接入链路与数据质量全链路监控。' },
-    { subject_code: 'APP-SMART-CITY', subject_name: '智慧城市大脑应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/smart-city', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.42.0/24'], subject_status: 'enabled', credential_version: 1, description: '城市级全量量测汇总应用。' },
-    { subject_code: 'APP-MULTI-SOURCE', subject_name: '多源数据平台应用', subject_type: 'internal_app', organization_code: 'EQUIPMENT', organization_name: '设备管理部', credential_ref: 'secret://subjects/multi-source', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.43.0/24'], subject_status: 'enabled', credential_version: 1, description: '多源量测汇聚与停电研判。' },
-    { subject_code: 'APP-DIGITAL-SUBSTATION', subject_name: '营销数字化平台应用', subject_type: 'internal_app', organization_code: 'MARKETING', organization_name: '营销部', credential_ref: 'secret://subjects/digital-substation', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.44.0/24'], subject_status: 'enabled', credential_version: 1, description: '数字化供电所营销服务应用。' },
-    { subject_code: 'APP-CHARGING', subject_name: '充换电运营服务应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/charging', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.45.0/24'], subject_status: 'enabled', credential_version: 1, description: '充换电运营服务管理平台。' },
-    { subject_code: 'APP-NEW-ENERGY', subject_name: '新能源选址及配网承载力应用', subject_type: 'internal_app', organization_code: 'DEV-PLAN', organization_name: '发展部', credential_ref: 'secret://subjects/new-energy', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.46.0/24'], subject_status: 'enabled', credential_version: 1, description: '新能源智能选址与配网承载力计算。' },
-    { subject_code: 'APP-AUDIT', subject_name: '数字化审计工具应用', subject_type: 'internal_app', organization_code: 'AUDIT', organization_name: '审计监管部', credential_ref: 'secret://subjects/audit', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.47.0/24'], subject_status: 'enabled', credential_version: 1, description: '数字化审计工具。' },
-    { subject_code: 'APP-DISCIPLINE', subject_name: '纪检工作智慧平台应用', subject_type: 'internal_app', organization_code: 'DISCIPLINE', organization_name: '纪委办公室', credential_ref: 'secret://subjects/discipline', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.48.0/24'], subject_status: 'enabled', credential_version: 1, description: '纪检工作智慧平台。' },
-    { subject_code: 'APP-INTELLIGENT-DISPATCH', subject_name: '智能化供电服务指挥系统应用', subject_type: 'internal_app', organization_code: 'EQUIPMENT', organization_name: '设备管理部', credential_ref: 'secret://subjects/intelligent-dispatch', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.49.0/24'], subject_status: 'enabled', credential_version: 1, description: '智能化供电服务指挥系统。' },
+    { subject_code: 'APP-INTERNAL-A', subject_name: '调度运行应用', subject_type: 'internal_app', organization_code: 'ORG-A', organization_name: '调控中心', credential_ref: 'secret://subjects/internal-a', allowed_api_codes_json: ['API-DIRECT-REGION-LOAD', 'API-DEVELOP-ACTIVE-POWER'], ip_whitelist_json: ['10.20.10.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-INTERNAL-B', subject_name: '区域统计应用', subject_type: 'internal_app', organization_code: 'ORG-B', organization_name: '数据管理中心', credential_ref: 'secret://subjects/internal-b', allowed_api_codes_json: ['API-ORCH-REGION-HOURLY'], ip_whitelist_json: ['10.20.20.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-EXTERNAL-C', subject_name: '跨域分析方', subject_type: 'external_party', organization_code: 'EXT-C', organization_name: '外部协作单位', credential_ref: 'secret://subjects/external-c', allowed_api_codes_json: ['API-ORCH-REGION-HOURLY'], ip_whitelist_json: ['172.18.10.10/32'], subject_status: 'enabled' },
+    { subject_code: 'APP-ONLINE-GRID', subject_name: '网上电网应用', subject_type: 'internal_app', organization_code: 'DEV-PLAN', organization_name: '发展部', credential_ref: 'secret://subjects/online-grid', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.30.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-MARKETING-2', subject_name: '能源互联网营销应用', subject_type: 'internal_app', organization_code: 'SAFETY', organization_name: '安监部', credential_ref: 'secret://subjects/marketing-2', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.31.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-LINE-LOSS', subject_name: '一体化电量线损应用', subject_type: 'internal_app', organization_code: 'DEV-PLAN', organization_name: '发展部', credential_ref: 'secret://subjects/line-loss', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.32.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-LINE-RELATION', subject_name: '线变关系辨识应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/line-relation', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.33.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-SALES-FORECAST', subject_name: '售电量预测应用', subject_type: 'internal_app', organization_code: 'MARKETING', organization_name: '营销部', credential_ref: 'secret://subjects/sales-forecast', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.34.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-CREDIT-ELECTRIC', subject_name: '电力看信用应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/credit-electric', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.35.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-DATA-GOVERN', subject_name: '数据质量核查应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/data-govern', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.36.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-EXTERNAL-ENV', subject_name: '电力看环保对接方', subject_type: 'external_party', organization_code: 'EXT-ENV', organization_name: '省生态环境厅', credential_ref: 'secret://subjects/external-env', allowed_api_codes_json: [], ip_whitelist_json: ['198.51.100.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-DATA-TRANSFER', subject_name: '数据传输组件应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/data-transfer', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.40.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-FULL-LINK-MONITOR', subject_name: '全链路监控应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/full-link-monitor', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.41.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-SMART-CITY', subject_name: '智慧城市大脑应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/smart-city', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.42.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-MULTI-SOURCE', subject_name: '多源数据平台应用', subject_type: 'internal_app', organization_code: 'EQUIPMENT', organization_name: '设备管理部', credential_ref: 'secret://subjects/multi-source', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.43.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-DIGITAL-SUBSTATION', subject_name: '营销数字化平台应用', subject_type: 'internal_app', organization_code: 'MARKETING', organization_name: '营销部', credential_ref: 'secret://subjects/digital-substation', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.44.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-CHARGING', subject_name: '充换电运营服务应用', subject_type: 'internal_app', organization_code: 'DIGITAL', organization_name: '数字化部', credential_ref: 'secret://subjects/charging', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.45.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-NEW-ENERGY', subject_name: '新能源选址及配网承载力应用', subject_type: 'internal_app', organization_code: 'DEV-PLAN', organization_name: '发展部', credential_ref: 'secret://subjects/new-energy', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.46.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-AUDIT', subject_name: '数字化审计工具应用', subject_type: 'internal_app', organization_code: 'AUDIT', organization_name: '审计监管部', credential_ref: 'secret://subjects/audit', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.47.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-DISCIPLINE', subject_name: '纪检工作智慧平台应用', subject_type: 'internal_app', organization_code: 'DISCIPLINE', organization_name: '纪委办公室', credential_ref: 'secret://subjects/discipline', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.48.0/24'], subject_status: 'enabled' },
+    { subject_code: 'APP-INTELLIGENT-DISPATCH', subject_name: '智能化供电服务指挥系统应用', subject_type: 'internal_app', organization_code: 'EQUIPMENT', organization_name: '设备管理部', credential_ref: 'secret://subjects/intelligent-dispatch', allowed_api_codes_json: [], ip_whitelist_json: ['10.20.49.0/24'], subject_status: 'enabled' },
   ]
   for (const item of subjectData) {
     await upsert('security_access_subjects', { subject_code: item.subject_code }, item)
@@ -2782,7 +2747,6 @@ async function seedBusinessData(ref) {
           queryRangeExceeded: { enabled: true, action: 'deny', riskScore: 60 },
           rowLimitExceeded: { enabled: true, action: 'deny', riskScore: 70 },
           scopeViolation: { enabled: true, action: 'deny', riskScore: 80 },
-          behaviorAnomaly: { enabled: true, action: 'risk', riskScore: 20 },
         },
       })
     }

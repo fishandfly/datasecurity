@@ -15,8 +15,10 @@ test('分类标签作为组件配置下的二级导航', () => {
   assert.doesNotMatch(navigationSource, /title: '分类标签'/)
 })
 
-test('标签管理统一提供目录、规则和标注记录入口', () => {
-  assert.match(tabsSource, /tags: \[[\s\S]*label: '标签目录'[\s\S]*label: '标签规则'[\s\S]*label: '标注记录'/)
+test('标签管理不再重复渲染二级 Tab', () => {
+  const tagTabs = tabsSource.match(/tags: \[[\s\S]*?\n  \],/)?.[0] ?? ''
+  assert.match(tagTabs, /tags: \[\]/)
+  assert.doesNotMatch(tagTabs, /标签管理|标签目录|标签规则|标注记录/)
   const resourcesTabs = tabsSource.match(/resources: \[[\s\S]*?\n  \],/)?.[0] ?? ''
   const ingestTabs = tabsSource.match(/ingest: \[[\s\S]*?\n  \],/)?.[0] ?? ''
   assert.doesNotMatch(resourcesTabs, /label: '数据标签'/)
@@ -25,7 +27,7 @@ test('标签管理统一提供目录、规则和标注记录入口', () => {
 
 test('新标签路由可达且旧入口保持重定向', () => {
   assert.match(routesSource, /path="\/security-governance\/tags\/catalog" element=\{<SecurityDataLabelsPage/)
-  assert.match(routesSource, /path="\/security-governance\/tags\/rules" element=\{<SecurityTagRulesPage/)
-  assert.match(routesSource, /path="\/security-governance\/tags\/records" element=\{<SecurityTagResultsPage/)
-  assert.match(routesSource, /path="\/security-governance\/ingest\/tag-rules" element=\{<Navigate to="\/security-governance\/tags\/rules"/)
+  assert.match(routesSource, /path="\/security-governance\/tags\/rules" element=\{<Navigate to="\/security-governance\/tags\/catalog"/)
+  assert.match(routesSource, /path="\/security-governance\/tags\/records" element=\{<Navigate to="\/security-governance\/tags\/catalog"/)
+  assert.match(routesSource, /path="\/security-governance\/ingest\/tag-rules" element=\{<Navigate to="\/security-governance\/tags\/catalog"/)
 })

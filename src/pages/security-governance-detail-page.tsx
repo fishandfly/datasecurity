@@ -503,8 +503,8 @@ export function SecurityGovernanceDetailPage() {
       icon: ShieldCheck,
     },
     {
-      label: '接入日志',
-      path: '/security-governance/ingest/logs',
+      label: '接入状态',
+      path: '/security-governance/ingest/sources',
       value: latestStatus?.label || '未产生统计',
       description: latestBatchStat.latestPeriodCode ? `统计批次 ${latestBatchStat.latestPeriodCode}` : businessTimeStatusLabel,
       icon: Network,
@@ -512,8 +512,8 @@ export function SecurityGovernanceDetailPage() {
   ]
   const auditAlignmentItems: AlignmentItem[] = [
     {
-      label: '调用与决策日志',
-      path: '/security-governance/access/audit',
+      label: '完整版访问日志',
+      path: '/security-governance/logs',
       value: `${securityRelations.accessPolicies.filter((policy) => policy.publish_status === 'success').length} 条已发布策略`,
       description: `${securityRelations.apis.filter((api) => api.publish_status === 'success').length} 个已发布 API / 未命中策略默认拒绝`,
       icon: FileSearch,
@@ -683,7 +683,7 @@ export function SecurityGovernanceDetailPage() {
           />
           <div className="mt-5">
             <div className="mb-4 rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
-              字段仅保留资源字典基础信息和同态任务使用情况。访问策略控制到数据资源层级，字段输出范围统一由 API 发布配置维护。
+              这里维护字段字典与运行时使用的字段安全属性：安全等级、字段标签、重要字段、脱敏和 API 返回；访问策略仍控制数据资源级授权。
             </div>
             <ResourceFieldsPanel
               resourceId={item.id}

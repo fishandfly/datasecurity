@@ -75,7 +75,7 @@ function buildAccessRules(sources: SecurityDataSourceRecord[]): AccessRuleRecord
       source.tags.length > 0 ? `绑定数据源标签：${source.tags.join('、')}` : '',
       config.samplingEnabled ? `按 ${config.samplingRate}% 比例执行接入抽样` : '',
     ].filter(Boolean)
-    const priority = source.sensitivity === 'highly_sensitive' ? 100 : source.sensitivity === 'sensitive' ? 80 : source.sensitivity === 'internal' ? 60 : 40
+    const priority = config.integrityEnabled && config.encryptionEnabled ? 80 : config.integrityEnabled || config.encryptionEnabled ? 60 : 40
     return {
       id: source.id,
       name: `${source.name}安全接入规则`,
@@ -85,7 +85,7 @@ function buildAccessRules(sources: SecurityDataSourceRecord[]): AccessRuleRecord
       sourceScope: source.sourceTypeLabel,
       sourceName: source.name,
       priority,
-      gatewayMode: source.sensitivity === 'highly_sensitive' ? '专用接入网关' : '共享接入网关',
+      gatewayMode: '受控接入网关',
       labelTemplate: source.tags.join('、') || '未配置标签',
       checksumAlgorithm: config.checksumAlgorithm,
       encryptionAlgorithm: config.encryptionAlgorithm,
@@ -100,7 +100,6 @@ function buildAccessRules(sources: SecurityDataSourceRecord[]): AccessRuleRecord
       description: source.description || `${source.name}的统一安全接入配置。`,
       conditions: [
         `数据源类型等于 ${source.sourceTypeLabel}`,
-        `敏感度等于 ${source.sensitivityLabel}`,
         `连接状态等于 ${source.statusLabel}`,
       ],
       actions: actions.length > 0 ? actions : ['未配置安全接入动作'],

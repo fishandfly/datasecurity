@@ -12,7 +12,7 @@ export const SecurityGovernanceManifest: AppModuleManifest = {
   navTargets: [
     '/security-governance/dashboard',
     '/security-governance/resources/catalog',
-    '/security-governance/risks/events',
+    '/security-governance/logs',
     '/security-governance/components',
   ],
   homeSectionKeys: ['security-governance'],

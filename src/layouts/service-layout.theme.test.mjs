@@ -19,6 +19,6 @@ test('暗色主题覆盖顶部导航专用变量', () => {
 })
 
 test('顶部全局搜索条桌面端宽度收窄为原配置约一半', () => {
-  assert.match(layoutSource, /sm:w-\[320px\] lg:w-\[380px\] xl:w-\[450px\]/)
+  assert.match(layoutSource, /sm:w-\[320px\] sm:min-w-\[320px\][\s\S]*lg:w-\[380px\] xl:w-\[450px\]/)
   assert.doesNotMatch(layoutSource, /sm:w-\[620px\] lg:w-\[760px\] xl:w-\[900px\]/)
 })

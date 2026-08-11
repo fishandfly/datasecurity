@@ -16,8 +16,6 @@ export type ResourceSecuritySummary = {
   homomorphicTaskCount: number
   completedHomomorphicTaskCount: number
   failedHomomorphicTaskCount: number
-  riskEventCount: number
-  pendingRiskCount: number
   warningCount: number
 }
 
@@ -35,8 +33,6 @@ const EMPTY_SUMMARY: ResourceSecuritySummary = {
   homomorphicTaskCount: 0,
   completedHomomorphicTaskCount: 0,
   failedHomomorphicTaskCount: 0,
-  riskEventCount: 0,
-  pendingRiskCount: 0,
   warningCount: 0,
 }
 
@@ -59,7 +55,6 @@ export function buildResourceSecuritySummaries({
   accessPolicies,
   decisions,
   homomorphicTasks,
-  risks,
 }: {
   resources: SecurityV3Record[]
   apis: SecurityV3Record[]
@@ -68,10 +63,7 @@ export function buildResourceSecuritySummaries({
   accessPolicies: SecurityV3Record[]
   decisions: SecurityV3Record[]
   homomorphicTasks: SecurityV3Record[]
-  risks: SecurityV3Record[]
 }) {
-  const decisionById = new Map(decisions.map((record) => [id(record.id), record]))
-
   return new Map(resources.map((resource) => {
     const resourceId = id(resource.id)
     const resourceApis = apis.filter((record) => id(record.resource_id) === resourceId)
@@ -86,17 +78,9 @@ export function buildResourceSecuritySummaries({
       id(record.resource_id) === resourceId || apiIds.has(id(record.api_resource_id))
     ) && record.policy_kind === 'access_policy')
     const resourceDecisions = decisions.filter((record) => apiIds.has(id(record.api_resource_id)))
-    const decisionIds = new Set(resourceDecisions.map((record) => id(record.id)).filter(Boolean))
     const resourceTasks = homomorphicTasks.filter((record) => apiIds.has(id(record.api_resource_id)) && record.task_status !== 'archived')
-    const resourceRisks = risks.filter((record) => {
-      const decisionId = id(record.decision_log_id)
-      if (decisionIds.has(decisionId)) return true
-      const decision = decisionById.get(decisionId)
-      return Boolean(decision && apiIds.has(id(decision.api_resource_id)))
-    })
     const ingestFailureCount = countMatching(resourceIngestLogs, (record) => ['failed', 'partial'].includes(String(record.result_status)))
     const failedHomomorphicTaskCount = countMatching(resourceTasks, (record) => record.task_status === 'failed')
-    const pendingRiskCount = countMatching(resourceRisks, (record) => record.event_status !== 'closed')
     const exceptionSourceCount = countMatching(resourceSources, (record) => record.connection_status === 'exception')
 
     return [resourceId, {
@@ -113,9 +97,7 @@ export function buildResourceSecuritySummaries({
       homomorphicTaskCount: resourceTasks.length,
       completedHomomorphicTaskCount: countMatching(resourceTasks, (record) => ['success', 'completed'].includes(String(record.task_status))),
       failedHomomorphicTaskCount,
-      riskEventCount: resourceRisks.length,
-      pendingRiskCount,
-      warningCount: pendingRiskCount + ingestFailureCount + failedHomomorphicTaskCount + exceptionSourceCount,
+      warningCount: ingestFailureCount + failedHomomorphicTaskCount + exceptionSourceCount + countMatching(resourceDecisions, (record) => ['deny', 'denied', '拒绝'].includes(String(record.decision_result))),
     } satisfies ResourceSecuritySummary] as const
   }))
 }
@@ -132,9 +114,8 @@ async function loadResourceSecuritySummaries() {
     listSecurityV3Records('eco_resource_security_policies'),
     listSecurityV3Records('security_policy_decision_logs'),
     listSecurityV3Records('security_confidential_tasks'),
-    listSecurityV3Records('security_risk_events'),
-  ]).then(([resources, apis, sources, ingestLogs, accessPolicies, decisions, homomorphicTasks, risks]) => {
-    summaryCache = buildResourceSecuritySummaries({ resources, apis, sources, ingestLogs, accessPolicies, decisions, homomorphicTasks, risks })
+  ]).then(([resources, apis, sources, ingestLogs, accessPolicies, decisions, homomorphicTasks]) => {
+    summaryCache = buildResourceSecuritySummaries({ resources, apis, sources, ingestLogs, accessPolicies, decisions, homomorphicTasks })
     return summaryCache
   }).finally(() => {
     summaryPromise = null

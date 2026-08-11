@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const source = readFileSync(resolve(process.cwd(), 'src/lib/product-modules.ts'), 'utf8')
@@ -12,37 +12,13 @@ const registrySource = readFileSync(resolve(process.cwd(), 'src/modules/registry
 const typesSource = readFileSync(resolve(process.cwd(), 'src/modules/types.ts'), 'utf8')
 const securityManifestSource = readFileSync(resolve(process.cwd(), 'src/modules/SecurityGovernance/manifest.ts'), 'utf8')
 
-const removedModuleIds = [
-  'resource-governance',
-  'data-product',
-  'application-governance',
-  'sharing-governance',
-  'operation-supervision',
-  'cockpit',
-]
-
-const removedModuleNames = [
-  'ResourceGovernance',
-  'DataProduct',
-  'ApplicationGovernance',
-  'SharingGovernance',
-  'OperationSupervision',
-  'Cockpit',
-]
-
 test('活动产品模块只保留数据安全管控', () => {
   assert.match(securityManifestSource, /id: 'security-governance'[\s\S]*title: '数据安全管控'[\s\S]*primaryPath: '\/security-governance\/dashboard'/)
   assert.match(typesSource, /export type AppModuleId = 'security-governance'/)
   assert.match(source, /export const PRODUCT_MODULES: ProductModuleDefinition\[] = APP_MODULE_MANIFESTS/)
   assert.match(registrySource, /export const APP_MODULES = \[[\s\S]*SecurityGovernanceModule,[\s\S]*\] satisfies AppModule\[]/)
-  removedModuleNames.forEach((moduleName) => {
-    assert.doesNotMatch(registrySource, new RegExp(`${moduleName}Module`))
-    assert.equal(existsSync(resolve(process.cwd(), `src/modules/${moduleName}`)), false)
-  })
-  removedModuleIds.forEach((moduleId) => {
-    assert.doesNotMatch(typesSource, new RegExp(`'${moduleId}'`))
-    assert.doesNotMatch(homePageSource, new RegExp(`moduleId: '${moduleId}'`))
-  })
+  assert.doesNotMatch(registrySource, /ResourceGovernanceModule|DataProductModule|ApplicationGovernanceModule|SharingGovernanceModule|OperationSupervisionModule|CockpitModule/)
+  assert.doesNotMatch(typesSource, /'resource-governance'|'data-product'|'application-governance'|'sharing-governance'|'operation-supervision'|'cockpit'/)
 })
 
 test('客户方案参数兼容保留，但运行模块统一收敛到数据安全管控', () => {

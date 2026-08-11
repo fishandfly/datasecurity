@@ -13,7 +13,7 @@ test('顶部导航移除独立数据服务入口并保持安全管控模块顺�
   assert.match(serviceLayoutSource, /primaryNavigations\.map\(\(item\) => \(/)
   assert.match(
     defaultPrimaryNavSource,
-    /const DEFAULT_PRIMARY_NAVIGATIONS:[\s\S]*title: '安全态势'[\s\S]*title: '数据资源'[\s\S]*title: '风险事件'[\s\S]*title: '组件配置'/,
+    /const DEFAULT_PRIMARY_NAVIGATIONS:[\s\S]*title: '安全态势'[\s\S]*title: '数据资源'[\s\S]*title: '日志中心'[\s\S]*title: '组件配置'/,
   )
   assert.doesNotMatch(defaultPrimaryNavSource, /title: '(接入校验|访问策略|同态加密|分类标签)'/)
   assert.doesNotMatch(defaultPrimaryNavSource, /title: '数据服务'/)
