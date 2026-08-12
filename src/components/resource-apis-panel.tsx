@@ -268,7 +268,7 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
               <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-[0.8125rem] text-[var(--text-main)]">{isStreaming ? subscriptionExampleUrl : accessUrl}</code>
               <CopyButton value={isStreaming ? subscriptionExampleUrl : accessUrl} />
             </div>
-            <div className="mt-2 text-[0.75rem] text-[var(--text-muted)]">网关相对路径：<code>{gatewayPath}</code>；{isStreaming ? '区域范围策略已启用时，订阅请求必须传入 regionCode。' : ''}生产环境请将当前站点域名替换为实际安全网关域名。</div>
+            <div className="mt-2 text-[0.75rem] text-[var(--text-muted)]">网关相对路径：<code>{gatewayPath}</code>；{isStreaming ? '数据所属区域策略已启用时，订阅请求必须传入 regionCode。' : ''}生产环境请将当前站点域名替换为实际安全网关域名。</div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -324,7 +324,7 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
               <ShieldCheck className="h-4 w-4 text-[var(--primary)]" />
               <h3 className="text-[1rem] font-semibold text-[var(--text-main)]">访问鉴权</h3>
             </div>
-            <div className="mt-2 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">调用方需要获得当前服务通道授权，并在请求头中传入 API Key 和已发布的调用场景。{isStreaming ? '订阅建立与后续续租均经过策略校验；系统不在此处保存或返回消息中台凭据。' : <>配置区域范围的策略还必须显式传入 <code>regionCode</code>。</>}</div>
+            <div className="mt-2 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">调用方需要获得当前服务通道授权，并在请求头中传入 API Key 和已发布的调用场景。{isStreaming ? '订阅建立与后续续租均经过策略校验；系统不在此处保存或返回消息中台凭据。' : <>配置数据所属区域的策略还必须显式传入 <code>regionCode</code>。</>}</div>
           </div>
           <div className="grid gap-2 text-[0.75rem] sm:min-w-[360px]">
             <code className="rounded-[8px] bg-[var(--surface-muted)] px-3 py-2 text-[var(--text-main)]">X-API-Key: $API_KEY</code>

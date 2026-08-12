@@ -466,15 +466,15 @@
         "name": "region_category",
         "type": "belongsTo",
         "interface": "m2o",
-        "description": "记录区域分类，用于配置、查询、关联、筛选和审计。",
-        "title": "区域分类",
+        "description": "记录数据所属区域，用于配置、查询、关联、筛选和审计。",
+        "title": "数据所属区域",
         "target": "jcCategoryTreeNodes",
         "foreignKey": "region_category_id",
         "targetKey": "id",
         "targetTitleField": "nodeName",
         "uiSchema": {
           "type": "object",
-          "title": "区域分类",
+          "title": "数据所属区域",
           "x-component": "AssociationField",
           "x-component-props": {
             "fieldNames": {
@@ -2354,10 +2354,10 @@
         "name": "region_scope_json",
         "type": "jsonb",
         "interface": "json",
-        "description": "记录区域范围，用于保存不含 Secret 和明文数据的结构化扩展信息。",
+        "description": "记录数据所属区域，用于保存不含 Secret 和明文数据的结构化扩展信息。",
         "uiSchema": {
           "type": "object",
-          "title": "区域范围",
+          "title": "数据所属区域",
           "x-component": "Input.JSON"
         }
       },
@@ -2824,10 +2824,10 @@
         "name": "region_scope_json",
         "type": "jsonb",
         "interface": "json",
-        "description": "记录区域范围，用于保存不含 Secret 和明文数据的结构化扩展信息。",
+        "description": "记录数据所属区域，用于保存不含 Secret 和明文数据的结构化扩展信息。",
         "uiSchema": {
           "type": "object",
-          "title": "区域范围",
+          "title": "数据所属区域",
           "x-component": "Input.JSON"
         }
       },

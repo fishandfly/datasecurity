@@ -79,7 +79,7 @@ function TaskDrawer({ task, onClose }: { task: ConfidentialTaskRecord | null; on
               ['数值样本', `${task.sampleCount} 条`],
               ['算法类型', formatOpenFheAlgorithm(task.algorithm)],
               ['触发方式', task.executionSummary.trigger === 'resource-api-policy' ? '资源 API 策略触发' : '历史任务'],
-              ['区域范围', String(scope.regionCode || task.regionScope.join('、') || '未限定')],
+              ['数据所属区域', String(scope.regionCode || task.regionScope.join('、') || '未限定')],
               ['组织范围', String(scope.organizationCode || task.organizationScope.join('、') || '未限定')],
               ['数据开始时间', String(scope.startAt || '未记录')],
               ['数据结束时间', String(scope.endAt || '未记录')],

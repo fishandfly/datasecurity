@@ -1532,16 +1532,16 @@ def authorize(request, body: bytes) -> RuntimeContext:
     region_field_code = str(runtime_config.get("regionFieldCode") or runtime_config.get("region_field_code") or "").strip()
     processing_path = str(api.get("orchestrator_path") or "")
     if policy_regions and not region:
-        add_risk_factor("regionRequired", "缺少区域参数", 80, "策略配置了区域范围，请求必须显式传入 regionCode")
+        add_risk_factor("regionRequired", "缺少数据所属区域参数", 80, "策略配置了数据所属区域，请求必须显式传入 regionCode")
         raise policy_denied("REGION_REQUIRED", 80)
     if policy_regions and processing_path == "/internal/resource-query" and not region_field_code:
-        add_risk_factor("regionFilter", "区域过滤不可用", 90, "策略配置了区域范围，但 API 未映射区域字段")
+        add_risk_factor("regionFilter", "数据所属区域过滤不可用", 90, "策略配置了数据所属区域，但 API 未映射区域字段")
         raise policy_denied("REGION_FILTER_UNAVAILABLE", 90)
     scope_violation = bool(policy_regions and region not in policy_regions)
     should_deny, risk_points = violation_risk(policy, "scopeViolation", scope_violation)
     extra_risk += risk_points
     if risk_points:
-        add_risk_factor("scopeViolation", "区域范围越界", risk_points, "请求的区域不在策略授权范围内")
+        add_risk_factor("scopeViolation", "数据所属区域越界", risk_points, "请求的区域不在策略授权范围内")
     if should_deny:
         raise policy_denied("SCOPE_VIOLATION", risk_points)
     fields = effective_param("fields")
@@ -3444,9 +3444,9 @@ def publish_policy(policy_id: int) -> dict[str, Any]:
         region_field_code = str(api_config.get("regionFieldCode") or api_config.get("region_field_code") or "").strip()
         query_sql, query_parameters = validate_custom_query_sql(api_config.get("querySql") or api_config.get("query_sql"))
         if processing_path == "/internal/resource-query" and not region_field_code:
-            errors.append("区域范围已配置，但 API 未映射区域字段")
+            errors.append("数据所属区域已配置，但 API 未映射区域字段")
         if processing_path == "/internal/resource-query" and query_sql and "regionCode" not in query_parameters:
-            errors.append("区域范围已配置，自定义 SQL 必须引用 :regionCode")
+            errors.append("数据所属区域已配置，自定义 SQL 必须引用 :regionCode")
     rules = _json_object(policy.get("abnormal_access_rules_json"))
     for rule_name in DEFAULT_ABNORMAL_ACCESS_RULES:
         rule = rules.get(rule_name)

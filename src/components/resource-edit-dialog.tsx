@@ -515,7 +515,7 @@ export function ResourceEditDialog({
                   onChange={(nextValue) => updateField('providerNodeId', nextValue)}
                 />
                 <TreeSelectField
-                  label="区域范围"
+                  label="数据所属区域"
                   tree={regionTree}
                   value={form.regionCategoryId}
                   onChange={(nextValue, label) => {

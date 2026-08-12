@@ -86,7 +86,7 @@ const abnormalRuleDefinitions: Array<{ key: AbnormalRuleKey; label: string }> = 
   { key: 'highFrequency', label: '高频调用' },
   { key: 'queryRangeExceeded', label: '查询时间范围超限' },
   { key: 'rowLimitExceeded', label: '返回行数超限' },
-  { key: 'scopeViolation', label: '区域范围越界' },
+  { key: 'scopeViolation', label: '数据所属区域越界' },
 ]
 
 const weekdayOptions = [

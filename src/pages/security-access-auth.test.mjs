@@ -58,7 +58,7 @@ test('访问策略抽屉使用结构化控件维护运行规则', () => {
   assert.match(pageSource, /name: 'source_ips_json', label: '来源 IP 范围', type: 'string-list'/)
   assert.match(pageSource, /name: 'allowed_time_ranges_json', label: '允许时段', type: 'time-ranges'/)
   assert.match(pageSource, /name: 'scenario', label: '使用场景', type: 'select'/)
-  assert.match(pageSource, /name: 'region_scope_json', label: '区域范围', type: 'relation-list'/)
+  assert.match(pageSource, /name: 'region_scope_json', label: '数据所属区域', type: 'relation-list'/)
   assert.doesNotMatch(resourcePolicySource, /name: 'organization_scope_json', label: '组织范围'/)
   assert.match(pageSource, /name: 'abnormal_access_rules_json', label: '异常访问决策规则', type: 'abnormal-rules'/)
   assert.match(collectionPageSource, /function StringListField/)
@@ -79,9 +79,9 @@ test('资源访问策略在缺少已发布服务通道时可直接上线当前�
   assert.match(resourcePolicySource, /setApiRefreshVersion/)
 })
 
-test('区域范围被强制传参、校验并执行过滤', () => {
+test('数据所属区域被强制传参、校验并执行过滤', () => {
   assert.match(runtimeSource, /"REGION_REQUIRED"/)
-  assert.match(runtimeSource, /策略配置了区域范围，请求必须显式传入 regionCode/)
+  assert.match(runtimeSource, /策略配置了数据所属区域，请求必须显式传入 regionCode/)
   assert.match(runtimeSource, /policy_regions and processing_path == "\/internal\/resource-query" and not region_field_code/)
   assert.doesNotMatch(runtimeSource, /organization and _json_list\(policy\.get\("organization_scope_json"\)\)/)
 })

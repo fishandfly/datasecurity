@@ -453,7 +453,7 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
       ] },
       { name: 'source_ips_json', label: '允许来源 IP/CIDR', type: 'string-list', defaultValue: [] },
       { name: 'allowed_time_ranges_json', label: '允许调用时段', type: 'time-ranges', defaultValue: [] },
-      { name: 'region_scope_json', label: '区域范围', type: 'relation-list', relation: { collection: 'jcCategoryTreeNodes', labelKey: 'nodeName', filter: { typeCode: 'eco_region_categories' }, optionValue: regionOptionValue }, defaultValue: [] },
+      { name: 'region_scope_json', label: '数据所属区域', type: 'relation-list', relation: { collection: 'jcCategoryTreeNodes', labelKey: 'nodeName', filter: { typeCode: 'eco_region_categories' }, optionValue: regionOptionValue }, defaultValue: [] },
       { name: 'output_mode', label: '输出模式', type: 'select', required: true, defaultValue: 'detail', options: [{ value: 'detail', label: '明细' }, { value: 'masked', label: '脱敏明细' }, { value: 'aggregate', label: '聚合结果' }, { value: 'encrypted', label: '密态结果' }] },
       { name: 'max_requests_per_minute', label: '每分钟请求上限', type: 'number', required: true, defaultValue: 60 },
       { name: 'max_query_days', label: '最大查询天数', type: 'number', required: true, defaultValue: 1 },
@@ -494,7 +494,7 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
-        API Key 鉴权与主体服务通道授权在数据应用中先行完成；这里只维护数据资源级策略：场景、来源 IP、时段、区域范围、输出模式、查询与频率上限，以及异常访问的允许/拒绝决策。策略仅可绑定已上线服务通道，字段范围或订阅方式由通道发布配置统一控制。
+        API Key 鉴权与主体服务通道授权在数据应用中先行完成；这里只维护数据资源级策略：场景、来源 IP、时段、数据所属区域、输出模式、查询与频率上限，以及异常访问的允许/拒绝决策。策略仅可绑定已上线服务通道，字段范围或订阅方式由通道发布配置统一控制。
       </div>
       {publishedApiCount === 0 ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-warning-text)]">

@@ -344,7 +344,7 @@ const extensions = {
     field.integer('max_query_days', '最大查询天数', { allowNull: false, defaultValue: 1 }),
     field.integer('max_rows', '最大返回行数', { allowNull: false, defaultValue: 1000 }),
     field.json('organization_scope_json', '组织范围'),
-    field.json('region_scope_json', '区域范围'),
+    field.json('region_scope_json', '数据所属区域'),
     field.json('abnormal_access_rules_json', '异常访问处置规则'),
     field.select('output_mode', '输出模式', outputModes),
     field.integer('risk_threshold', '风险阈值', { allowNull: false, defaultValue: 70 }),
@@ -358,7 +358,7 @@ const extensions = {
   ],
   security_confidential_tasks: [
     field.select('operation', '计算操作', [['sum', '求和'], ['mean', '平均值']]),
-    field.json('region_scope_json', '区域范围'),
+    field.json('region_scope_json', '数据所属区域'),
     field.json('organization_scope_json', '组织范围'),
     field.input('measure_field_code', '量测字段编码'),
     field.datetime('data_start_at', '数据开始时间'),
@@ -484,7 +484,7 @@ async function ensureClassificationsAndTagPolicies() {
   const categoryTypes = [
     ['eco_domain_category', '数据分类树', '电网业务域分类。'],
     ['eco_provider_units', '提供单位树', '数据责任组织分类。'],
-    ['eco_region_categories', '区域分类树', '量测数据区域范围分类。'],
+    ['eco_region_categories', '数据所属区域树', '量测数据所属区域分类。'],
     ['information_category', '信息分类树', '量测字段信息分类。'],
   ]
   for (const [typeCode, typeName, typeDescription] of categoryTypes) {

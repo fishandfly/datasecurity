@@ -148,7 +148,7 @@ export function ResourceHomomorphicPanel({ resourceId, resourceCode, canManage }
       { name: 'measure_field_code', label: '计算字段编码', required: true },
       { name: 'algorithm', label: '算法类型', type: 'select', required: true, defaultValue: 'ckks', options: [{ value: 'ckks', label: '浮点近似型' }, { value: 'bfv', label: '整数精确型' }] },
       { name: 'operation', label: '计算操作', type: 'select', required: true, defaultValue: 'sum', options: [{ value: 'sum', label: '求和' }, { value: 'mean', label: '平均值' }] },
-      { name: 'region_scope_json', label: '区域数据范围', type: 'json', required: true, defaultValue: [] },
+      { name: 'region_scope_json', label: '数据所属区域', type: 'json', required: true, defaultValue: [] },
       { name: 'organization_scope_json', label: '组织数据范围', type: 'json', required: true, defaultValue: [] },
       { name: 'data_start_at', label: '数据开始时间', type: 'datetime', required: true },
       { name: 'data_end_at', label: '数据结束时间', type: 'datetime', required: true },
