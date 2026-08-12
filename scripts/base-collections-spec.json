@@ -1232,8 +1232,8 @@
   },
   {
     "name": "security_api_resources",
-    "title": "API 资源",
-    "description": "管理三种 API 接入模式、数据范围能力、发布路径和运行状态。",
+    "title": "数据服务通道",
+    "description": "管理查询、流式订阅和主题消费三类受控数据服务通道及其发布状态。",
     "options": {
       "template": "general",
       "autoGenId": true,
@@ -1248,10 +1248,10 @@
         "name": "api_code",
         "type": "string",
         "interface": "input",
-        "description": "记录API 编码，用于配置、查询、关联、筛选和审计。",
+        "description": "记录通道编码，用于配置、查询、关联、筛选和审计。",
         "uiSchema": {
           "type": "string",
-          "title": "API 编码",
+          "title": "通道编码",
           "x-component": "Input"
         },
         "allowNull": false,
@@ -1261,13 +1261,62 @@
         "name": "api_name",
         "type": "string",
         "interface": "input",
-        "description": "记录API 名称，用于配置、查询、关联、筛选和审计。",
+        "description": "记录通道名称，用于配置、查询、关联、筛选和审计。",
         "uiSchema": {
           "type": "string",
-          "title": "API 名称",
+          "title": "通道名称",
           "x-component": "Input"
         },
         "allowNull": false
+      },
+      {
+        "name": "channel_type",
+        "type": "string",
+        "interface": "select",
+        "description": "记录通道的交付方式，用于选择查询服务、流式订阅或主题消费。",
+        "uiSchema": {
+          "type": "string",
+          "title": "通道类型",
+          "enum": [
+            { "value": "query_service", "label": "查询服务" },
+            { "value": "stream_subscription", "label": "流式订阅" },
+            { "value": "topic_consumer", "label": "主题消费" }
+          ],
+          "x-component": "Select"
+        },
+        "allowNull": false,
+        "defaultValue": "query_service"
+      },
+      {
+        "name": "topic_name",
+        "type": "string",
+        "interface": "input",
+        "description": "记录流式通道对应的上游主题名称，不保存连接凭据。",
+        "uiSchema": { "type": "string", "title": "流式主题", "x-component": "Input" }
+      },
+      {
+        "name": "consumer_group",
+        "type": "string",
+        "interface": "input",
+        "description": "记录流式消费组标识，用于受控订阅授权。",
+        "uiSchema": { "type": "string", "title": "消费组", "x-component": "Input" }
+      },
+      {
+        "name": "subscription_mode",
+        "type": "string",
+        "interface": "select",
+        "description": "记录流式订阅交付模式。",
+        "uiSchema": {
+          "type": "string",
+          "title": "订阅模式",
+          "enum": [
+            { "value": "push", "label": "推送" },
+            { "value": "pull", "label": "拉取" },
+            { "value": "batch", "label": "批量" }
+          ],
+          "x-component": "Select"
+        },
+        "defaultValue": "push"
       },
       {
         "name": "access_mode",
@@ -1436,10 +1485,10 @@
         "name": "api_status",
         "type": "string",
         "interface": "select",
-        "description": "记录API 状态，用于状态、类型和运行决策的受控值。",
+        "description": "记录通道状态，用于状态、类型和运行决策的受控值。",
         "uiSchema": {
           "type": "string",
-          "title": "API 状态",
+          "title": "通道状态",
           "enum": [
             {
               "value": "draft",
@@ -2467,14 +2516,14 @@
         "name": "api_resource",
         "type": "belongsTo",
         "interface": "m2o",
-        "description": "记录API 资源，用于建立明确的业务实体关联。",
+        "description": "记录数据服务通道，用于建立明确的业务实体关联。",
         "target": "security_api_resources",
         "foreignKey": "api_resource_id",
         "targetKey": "id",
         "targetTitleField": "api_name",
         "uiSchema": {
           "type": "object",
-          "title": "API 资源",
+          "title": "数据服务通道",
           "x-component": "AssociationField",
           "x-component-props": {
             "fieldNames": {
@@ -2953,14 +3002,14 @@
         "name": "api_resource",
         "type": "belongsTo",
         "interface": "m2o",
-        "description": "记录API 资源，用于建立明确的业务实体关联。",
+        "description": "记录数据服务通道，用于建立明确的业务实体关联。",
         "target": "security_api_resources",
         "foreignKey": "api_resource_id",
         "targetKey": "id",
         "targetTitleField": "api_name",
         "uiSchema": {
           "type": "object",
-          "title": "API 资源",
+          "title": "数据服务通道",
           "x-component": "AssociationField",
           "x-component-props": {
             "fieldNames": {

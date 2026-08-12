@@ -17,13 +17,13 @@ export type SecurityV3Option = { value: string; label: string }
 export type SecurityV3FormField = {
   name: string
   label: string
-  type?: 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'json' | 'datetime' | 'string-list' | 'time-ranges' | 'abnormal-rules'
+  type?: 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'json' | 'datetime' | 'string-list' | 'relation-list' | 'time-ranges' | 'abnormal-rules'
   required?: boolean
   min?: number
   max?: number
   options?: SecurityV3Option[]
   defaultValue?: unknown
-  relation?: { collection: string; valueKey?: string; labelKey: string; filter?: Record<string, unknown> }
+  relation?: { collection: string; valueKey?: string; labelKey: string; filter?: Record<string, unknown>; optionValue?: (record: SecurityV3Record) => string }
   readOnly?: boolean
   hidden?: boolean
 }
@@ -86,7 +86,7 @@ const abnormalRuleDefinitions: Array<{ key: AbnormalRuleKey; label: string }> = 
   { key: 'highFrequency', label: '高频调用' },
   { key: 'queryRangeExceeded', label: '查询时间范围超限' },
   { key: 'rowLimitExceeded', label: '返回行数超限' },
-  { key: 'scopeViolation', label: '组织或区域范围越界' },
+  { key: 'scopeViolation', label: '区域范围越界' },
 ]
 
 const weekdayOptions = [
@@ -151,6 +151,7 @@ function normalizeFormValue(field: SecurityV3FormField, value: unknown) {
   if (field.type === 'boolean') return Boolean(value ?? field.defaultValue ?? false)
   if (field.type === 'json') return JSON.stringify(value ?? field.defaultValue ?? {}, null, 2)
   if (field.type === 'string-list') return normalizeStringList(value ?? field.defaultValue)
+  if (field.type === 'relation-list') return normalizeStringList(value ?? field.defaultValue)
   if (field.type === 'time-ranges') return normalizeTimeRanges(value ?? field.defaultValue)
   if (field.type === 'abnormal-rules') return normalizeAbnormalRules(value ?? field.defaultValue)
   if (field.type === 'datetime' && value) return String(value).slice(0, 16)
@@ -167,6 +168,7 @@ function toSaveValues(fields: SecurityV3FormField[], form: Record<string, unknow
     if (field.type === 'number') return [field.name, value === '' ? null : Number(value)]
     if (field.type === 'json') return [field.name, String(value || '').trim() ? JSON.parse(String(value)) : {}]
     if (field.type === 'string-list') return [field.name, normalizeStringList(value)]
+    if (field.type === 'relation-list') return [field.name, normalizeStringList(value)]
     if (field.type === 'time-ranges') return [field.name, normalizeTimeRanges(value).filter((item) => item.days.length && item.from && item.to)]
     if (field.type === 'abnormal-rules') return [field.name, normalizeAbnormalRules(value)]
     if (field.type === 'datetime') return [field.name, value ? new Date(String(value)).toISOString() : null]
@@ -202,6 +204,40 @@ function StringListField({
         ))}
         {!values.length ? <div className="py-1 text-[0.8125rem] text-[var(--text-muted)]">未限制，留空表示不按此维度拦截。</div> : null}
         <button type="button" disabled={disabled} onClick={() => onChange([...values, ''])} className="inline-flex items-center gap-1 text-[0.8125rem] font-medium text-[var(--primary)] hover:underline disabled:cursor-not-allowed disabled:opacity-40"><Plus className="h-3.5 w-3.5" />添加一项</button>
+      </div>
+    </div>
+  )
+}
+
+function RelationListField({
+  field,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  field: SecurityV3FormField
+  value: unknown
+  options: SecurityV3Option[]
+  disabled: boolean
+  onChange: (value: string[]) => void
+}) {
+  const selected = normalizeStringList(value)
+  return (
+    <div className="space-y-2.5">
+      <StructuredFieldLabel field={field} />
+      <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-muted)] p-3">
+        <select
+          aria-label={field.label}
+          multiple
+          disabled={disabled}
+          value={selected}
+          onChange={(event) => onChange(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}
+          className="min-h-28 w-full rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-[0.875rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)] disabled:cursor-not-allowed disabled:bg-[var(--surface-muted)]"
+        >
+          {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+        <div className="mt-2 text-[0.75rem] leading-5 text-[var(--text-muted)]">按住 Command 或 Ctrl 可选择多个区域；未选择表示不限制区域。</div>
       </div>
     </div>
   )
@@ -293,7 +329,7 @@ function RecordDrawer({
       const relation = field.relation!
       const rows = await listSecurityV3Records(relation.collection, { filter: relation.filter })
       return [field.name, rows.map((item) => ({
-        value: String(item[relation.valueKey || 'id'] ?? ''),
+        value: relation.optionValue ? relation.optionValue(item) : String(item[relation.valueKey || 'id'] ?? ''),
         label: formatSecurityV3Value(item[relation.labelKey]),
       })).filter((item) => item.value)] as const
     })).then((entries) => {
@@ -344,6 +380,9 @@ function RecordDrawer({
             const disabled = readOnly || Boolean(field.readOnly)
             if (field.type === 'string-list') {
               return <StringListField key={field.name} field={field} value={value} disabled={disabled} onChange={(nextValue) => setForm((current) => ({ ...current, [field.name]: nextValue }))} />
+            }
+            if (field.type === 'relation-list') {
+              return <RelationListField key={field.name} field={field} value={value} options={options} disabled={disabled} onChange={(nextValue) => setForm((current) => ({ ...current, [field.name]: nextValue }))} />
             }
             if (field.type === 'time-ranges') {
               return <TimeRangesField key={field.name} field={field} value={value} disabled={disabled} onChange={(nextValue) => setForm((current) => ({ ...current, [field.name]: nextValue }))} />

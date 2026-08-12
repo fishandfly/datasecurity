@@ -134,7 +134,7 @@ export function ResourceHomomorphicPanel({ resourceId, resourceCode, canManage }
       { key: 'task_code', label: '任务编号' },
       { key: 'task_name', label: '任务名称' },
       { key: 'subject', label: '外部访问方' },
-      { key: 'api_resource', label: '密态 API' },
+      { key: 'api_resource', label: '密态服务通道' },
       { key: 'measure_field_code', label: '计算字段' },
       { key: 'algorithm', label: '算法', value: (record) => String(record.algorithm || '').toLowerCase() === 'bfv' ? '整数精确型' : '浮点近似型' },
       { key: 'operation', label: '操作', value: (record) => record.operation === 'mean' ? '平均值' : '求和' },
@@ -144,7 +144,7 @@ export function ResourceHomomorphicPanel({ resourceId, resourceCode, canManage }
     fields: [
       { name: 'task_name', label: '任务名称', required: true, defaultValue: `${resourceCode} 同态聚合任务` },
       { name: 'subject_id', label: '外部访问方', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name', filter: { subject_type: 'external_party', subject_status: 'enabled' } } },
-      { name: 'api_resource_id', label: '支持同态计算的已发布 API', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name', filter: { resource_id: resourceId, supports_homomorphic: true, api_status: 'enabled', publish_status: 'success' } } },
+      { name: 'api_resource_id', label: '支持同态计算的已发布服务通道', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name', filter: { resource_id: resourceId, supports_homomorphic: true, api_status: 'enabled', publish_status: 'success' } } },
       { name: 'measure_field_code', label: '计算字段编码', required: true },
       { name: 'algorithm', label: '算法类型', type: 'select', required: true, defaultValue: 'ckks', options: [{ value: 'ckks', label: '浮点近似型' }, { value: 'bfv', label: '整数精确型' }] },
       { name: 'operation', label: '计算操作', type: 'select', required: true, defaultValue: 'sum', options: [{ value: 'sum', label: '求和' }, { value: 'mean', label: '平均值' }] },
@@ -178,7 +178,7 @@ export function ResourceHomomorphicPanel({ resourceId, resourceCode, canManage }
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
-        同态任务只配置真实执行所需信息：外部访问方、支持同态的已发布 API、计算字段、数据范围、时间窗口、求和/平均操作、算法和有效密钥版本。任务配置不保存私钥、Secret 或原始明文值。
+        同态任务只配置真实执行所需信息：外部访问方、支持同态的已发布服务通道、计算字段、数据范围、时间窗口、求和/平均操作、算法和有效密钥版本。任务配置不保存私钥、Secret 或原始明文值。
       </div>
       <SecurityV3CollectionPage config={config} embedded />
     </div>

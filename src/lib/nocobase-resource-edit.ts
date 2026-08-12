@@ -8,6 +8,9 @@ type RawEditableResource = {
   resource_name?: string | null
   data_source_id?: number | string | null
   protection_level?: string | null
+  security_level?: string | null
+  measurement_type?: string | null
+  data_granularity?: string | null
   summary?: string | null
   contact_info?: string | null
   domain_category_id?: number | string | null
@@ -35,6 +38,9 @@ export type EditableResourceRecord = {
   resourceName: string
   dataSourceId: string
   protectionLevel: string
+  securityLevel: string
+  measurementType: string
+  dataGranularity: string
   summary: string
   contactInfo: string
   domainCategoryId: string
@@ -74,6 +80,9 @@ const EMPTY_EDITABLE_RESOURCE: EditableResourceRecord = {
   resourceName: '',
   dataSourceId: '',
   protectionLevel: 'l2',
+  securityLevel: '2',
+  measurementType: '',
+  dataGranularity: 'minute',
   summary: '',
   contactInfo: '',
   domainCategoryId: '',
@@ -255,6 +264,9 @@ function mapEditableResource(raw: RawEditableResource): EditableResourceRecord {
     resourceName: normalizeText(raw.resource_name),
     dataSourceId: normalizeId(raw.data_source_id),
     protectionLevel: normalizeText(raw.protection_level) || 'l2',
+    securityLevel: normalizeText(raw.security_level) || '2',
+    measurementType: normalizeText(raw.measurement_type),
+    dataGranularity: normalizeText(raw.data_granularity) || 'minute',
     summary: normalizeText(raw.summary),
     contactInfo: normalizeText(raw.contact_info),
     domainCategoryId: normalizeId(raw.domain_category_id),
@@ -294,6 +306,9 @@ function buildEditableResourceValues(values: EditableResourceRecord) {
     resource_name: values.resourceName.trim(),
     data_source_id: toNullableId(values.dataSourceId),
     protection_level: values.protectionLevel.trim() || 'l2',
+    security_level: values.securityLevel.trim() || '2',
+    measurement_type: values.measurementType.trim(),
+    data_granularity: values.dataGranularity.trim() || 'minute',
     summary: values.summary.trim(),
     contact_info: values.contactInfo.trim(),
     domain_category_id: toNullableId(values.domainCategoryId),

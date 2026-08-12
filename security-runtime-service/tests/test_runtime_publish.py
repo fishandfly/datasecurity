@@ -10,6 +10,7 @@ from app.runtime import (
     RuntimeDenied,
     build_resource_runtime_config,
     ensure_resource_api,
+    open_stream_subscription,
     publish_api,
     publish_policy,
     preview_resource_latest_rows,
@@ -188,6 +189,57 @@ def test_validate_api_accepts_placeholder_orchestrator_paths():
             "orchestrator_path": path,
         }
         assert validate_api(api) == []
+
+
+def test_validate_api_accepts_complete_stream_subscription_channel():
+    api = {
+        "channel_type": "stream_subscription",
+        "gateway_path": "/data-stream/resources/low-frequency-voltage",
+        "http_method": "POST",
+        "topic_name": "measurement.low-frequency.voltage",
+        "consumer_group": "security-governance-lvf",
+        "subscription_mode": "push",
+    }
+    assert validate_api(api) == []
+
+
+def test_validate_api_rejects_incomplete_stream_subscription_channel():
+    errors = validate_api({
+        "channel_type": "stream_subscription",
+        "gateway_path": "/data-api/resources/low-frequency-voltage",
+        "http_method": "GET",
+        "topic_name": "",
+        "consumer_group": "",
+        "subscription_mode": "invalid",
+    })
+    assert "流式通道地址必须以 /data-stream/ 开头" in errors
+    assert "流式通道的订阅授权方法必须为 POST" in errors
+    assert "流式通道必须配置流式主题" in errors
+
+
+def test_open_stream_subscription_returns_authorized_lease_without_messages():
+    context = RuntimeContext(
+        request_id="REQ-STREAM-001",
+        api={
+            "api_code": "CHANNEL-LVF-001",
+            "api_name": "低频电压流式订阅通道",
+            "channel_type": "stream_subscription",
+            "topic_name": "measurement.low-frequency.voltage",
+            "consumer_group": "security-governance-lvf",
+            "subscription_mode": "push",
+        },
+        subject={"id": 3},
+        policy={"id": 10, "output_mode": "detail"},
+        risk_score=0,
+        client_ip="10.20.10.8",
+        query_days=0,
+        requested_rows=0,
+    )
+    result = open_stream_subscription(context)
+    assert result["decision"] == "allow"
+    assert result["topicName"] == "measurement.low-frequency.voltage"
+    assert result["leaseSeconds"] == 300
+    assert "data" not in result
 
 
 def test_preview_resource_latest_rows_uses_defined_fields_and_time_descending():
@@ -513,6 +565,32 @@ def test_publish_policy_requires_subject_api_authorization():
     }
     with patch("app.runtime.fetch_one", return_value=policy), patch("app.runtime.execute"):
         with pytest.raises(ValueError, match="API 授权清单"):
+            publish_policy(12)
+
+
+def test_publish_policy_rejects_region_scope_when_api_has_no_region_field():
+    policy = {
+        "id": 12,
+        "policy_code": "POL-12",
+        "scenario": "resource-data-query",
+        "resource_id": 8,
+        "subject_id": 2,
+        "api_resource_id": 9,
+        "output_mode": "detail",
+        "subject_status": "enabled",
+        "api_status": "enabled",
+        "api_publish_status": "success",
+        "api_code": "API-RESOURCE-9",
+        "allowed_api_codes_json": ["API-RESOURCE-9"],
+        "max_requests_per_minute": 60,
+        "max_query_days": 1,
+        "max_rows": 1000,
+        "region_scope_json": ["REGION-A"],
+        "orchestrator_path": "/internal/resource-query",
+        "runtime_config_json": {"fieldMap": {"VALUE": "value"}},
+    }
+    with patch("app.runtime.fetch_one", return_value=policy), patch("app.runtime.execute"):
+        with pytest.raises(ValueError, match="未映射区域字段"):
             publish_policy(12)
 
 

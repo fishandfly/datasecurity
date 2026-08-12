@@ -143,10 +143,14 @@ const dictionaryViewSpecs = dictionarySpecs.map(([typeCode, typeName, values], i
 
 const newCollections = [
   {
-    name: 'security_api_resources', title: 'API 资源', titleField: 'api_name', description: '管理三种 API 接入模式、数据范围能力、发布路径和运行状态。',
+    name: 'security_api_resources', title: '数据服务通道', titleField: 'api_name', description: '管理查询、流式订阅和主题消费三类受控数据服务通道及其发布状态。',
     fields: [
-      field.input('api_code', 'API 编码', { allowNull: false, unique: true }),
-      field.input('api_name', 'API 名称', { allowNull: false }),
+      field.input('api_code', '通道编码', { allowNull: false, unique: true }),
+      field.input('api_name', '通道名称', { allowNull: false }),
+      field.select('channel_type', '通道类型', [['query_service', '查询服务'], ['stream_subscription', '流式订阅'], ['topic_consumer', '主题消费']], { allowNull: false, defaultValue: 'query_service' }),
+      field.input('topic_name', '流式主题'),
+      field.input('consumer_group', '消费组'),
+      field.select('subscription_mode', '订阅模式', [['push', '推送'], ['pull', '拉取'], ['batch', '批量']], { defaultValue: 'push' }),
       field.select('access_mode', '接入模式', [['direct', '直接纳管'], ['develop', '数据库服务化'], ['orchestrate', '编排增强']], { allowNull: false }),
       field.select('http_method', '请求方法', [['GET', 'GET'], ['POST', 'POST']], { allowNull: false, defaultValue: 'GET' }),
       field.input('upstream_url', '上游地址'),
@@ -158,7 +162,7 @@ const newCollections = [
       field.bool('supports_field_filter', '支持字段过滤', { allowNull: false, defaultValue: false }),
       field.bool('supports_aggregate', '支持聚合', { allowNull: false, defaultValue: false }),
       field.bool('supports_homomorphic', '支持密态任务', { allowNull: false, defaultValue: false }),
-      field.select('api_status', 'API 状态', commonStatus, { allowNull: false, defaultValue: 'draft' }),
+      field.select('api_status', '通道状态', commonStatus, { allowNull: false, defaultValue: 'draft' }),
       field.integer('publish_version', '发布版本', { allowNull: false, defaultValue: 0 }),
       field.select('publish_status', '发布状态', publishStatus, { allowNull: false, defaultValue: 'unpublished' }),
       field.datetime('published_at', '发布时间'),
@@ -187,7 +191,7 @@ const newCollections = [
     ],
     relations: [
       field.m2o('data_source', '数据源', 'security_data_sources', 'data_source_id', 'source_name', { allowNull: false }),
-      field.m2o('api_resource', 'API 资源', 'security_api_resources', 'api_resource_id', 'api_name'),
+      field.m2o('api_resource', '数据服务通道', 'security_api_resources', 'api_resource_id', 'api_name'),
     ],
   },
   {
@@ -230,7 +234,7 @@ const newCollections = [
     ],
     relations: [
       field.m2o('subject', '访问主体', 'security_access_subjects', 'subject_id', 'subject_name'),
-      field.m2o('api_resource', 'API 资源', 'security_api_resources', 'api_resource_id', 'api_name'),
+      field.m2o('api_resource', '数据服务通道', 'security_api_resources', 'api_resource_id', 'api_name'),
       field.m2o('policy', '命中策略', 'eco_resource_security_policies', 'policy_id', 'policy_name'),
     ],
   },
@@ -315,6 +319,9 @@ const existingCollections = {
 const extensions = {
   eco_data_resources: [
     field.select('protection_level', '防护层', [['l1', '普通共享层'], ['l2', '内部受控层'], ['l3', '跨域密态层']], { defaultValue: 'l2' }),
+    field.select('security_level', '数据安全等级', [['1', '1 级：一般可开放'], ['2', '2 级：条件开放'], ['3', '3 级：条件共享'], ['4', '4 级：高风险不共享']], { defaultValue: '2' }),
+    field.input('measurement_type', '数据类型'),
+    field.select('data_granularity', '数据粒度', [['realtime', '实时'], ['minute', '分钟级'], ['quarter_hour', '十五分钟级'], ['hour', '小时级'], ['day', '日级']]),
     field.select('resource_status', '资源状态', commonStatus, { defaultValue: 'draft' }),
     field.select('link_status', '关联状态', [['linked', '已关联设备档案'], ['unlinked', '未关联设备档案']], { defaultValue: 'linked' }),
     field.m2o('data_source', '数据源', 'security_data_sources', 'data_source_id', 'source_name'),
@@ -347,7 +354,7 @@ const extensions = {
     field.input('gateway_config_version', '运行配置版本'),
     field.text('publish_error', '发布错误'),
     field.m2o('subject', '访问主体', 'security_access_subjects', 'subject_id', 'subject_name'),
-    field.m2o('api_resource', 'API 资源', 'security_api_resources', 'api_resource_id', 'api_name'),
+    field.m2o('api_resource', '数据服务通道', 'security_api_resources', 'api_resource_id', 'api_name'),
   ],
   security_confidential_tasks: [
     field.select('operation', '计算操作', [['sum', '求和'], ['mean', '平均值']]),
@@ -365,7 +372,7 @@ const extensions = {
     field.integer('duration_ms', '执行耗时'),
     field.text('error_summary', '错误摘要'),
     field.m2o('subject', '外部访问方', 'security_access_subjects', 'subject_id', 'subject_name'),
-    field.m2o('api_resource', 'API 资源', 'security_api_resources', 'api_resource_id', 'api_name'),
+    field.m2o('api_resource', '数据服务通道', 'security_api_resources', 'api_resource_id', 'api_name'),
     field.m2o('crypto_key', '密钥版本', 'security_crypto_keys', 'crypto_key_id', 'key_code'),
   ],
 }
@@ -524,6 +531,89 @@ async function ensureClassificationsAndTagPolicies() {
       rules: [{ fieldName: ruleField, operator: 'eq', value }], tags, sort,
       remark: '3.0 最小实施基线受控标签策略。', scene: 'default',
     })
+  }
+}
+
+async function reconcileMinimumDeliveryDemo() {
+  // Preserve the small sample while proving the three source categories required for acceptance.
+  const sourceDefinitions = [
+    {
+      source_code: 'SRC-YC20-001', source_name: '用采 2.0 量测数据源', source_type: 'validation_database',
+      host: 'postgres', port: '5432', database_name: 'nocobase', username: 'nocobase',
+      secret_ref: 'secret://security/source/src-yc20-001', connection_status: 'connected', owner_dept: '营销采集中心',
+      source_tags: ['用采 2.0', '用户侧量测', '验证数据库'],
+      connection_options_json: { dialect: 'postgresql', readOnly: true, accessMode: 'database' },
+      tag_rules_json: { sourceSystem: '用电信息采集 2.0', businessDomain: 'marketing', trustZone: '营销受控域' },
+    },
+    {
+      source_code: 'SRC-DISPATCH-API-001', source_name: '调控云区域聚合 API', source_type: 'existing_api',
+      host: 'http://security-runtime:8090/health', port: null, database_name: '调控云区域聚合服务', username: null,
+      secret_ref: 'secret://security/source/src-ems-001', connection_status: 'connected', owner_dept: '调控中心',
+      source_tags: ['调控云', '区域聚合', '已有 API'],
+      connection_options_json: { accessMode: 'api', readOnly: true },
+      tag_rules_json: { sourceSystem: '调控云', businessDomain: 'production', trustZone: '生产受控域' },
+    },
+    {
+      source_code: 'SRC-DCLOUD-001', source_name: '调度自动化量测流式数据源', source_type: 'dispatch_cloud',
+      host: 'postgres', port: '5432', database_name: 'nocobase', username: 'nocobase',
+      secret_ref: 'secret://security/source/src-ems-001', connection_status: 'connected', owner_dept: '调控中心',
+      source_tags: ['调度自动化', '低频量测', '流式主题'],
+      connection_options_json: { dialect: 'postgresql', readOnly: true, accessMode: 'streaming-adapter', topic: 'measurement.low-frequency.voltage' },
+      tag_rules_json: { sourceSystem: '调度自动化', businessDomain: 'production', trustZone: '生产流式域' },
+    },
+  ]
+  const sourceIds = {}
+  for (const source of sourceDefinitions) sourceIds[source.source_code] = await upsert('security_data_sources', { source_code: source.source_code }, source)
+
+  const resourceMetadata = {
+    'GRID-METER-SEC-001': { data_source_id: sourceIds['SRC-YC20-001'], security_level: '3', measurement_type: '有功/无功负荷', data_granularity: 'quarter_hour' },
+    'GRID-DISPATCH-SEC-002': { data_source_id: sourceIds['SRC-DISPATCH-API-001'], security_level: '2', measurement_type: '区域负荷', data_granularity: 'hour' },
+    'GRID-LVF-VOLT-001': { data_source_id: sourceIds['SRC-DCLOUD-001'], security_level: '3', measurement_type: '低频电压', data_granularity: 'minute' },
+    'CUST-DAILY-ENERGY-003': { data_source_id: sourceIds['SRC-YC20-001'], security_level: '4', measurement_type: '日冻结电能示值', data_granularity: 'day' },
+    'CUST-POWER-CURVE-005': { data_source_id: sourceIds['SRC-YC20-001'], security_level: '4', measurement_type: '电能示值曲线', data_granularity: 'quarter_hour' },
+  }
+  for (const resource of await listAll('eco_data_resources')) {
+    const metadata = resourceMetadata[String(resource.resource_code || '')]
+    if (!metadata) continue
+    await client.resource('eco_data_resources').update({ filterByTk: resource.id, values: metadata })
+  }
+  const resourceSourceById = new Map((await listAll('eco_data_resources'))
+    .map((resource) => [String(resource.id), resourceMetadata[String(resource.resource_code || '')]?.data_source_id])
+    .filter(([, sourceId]) => sourceId))
+  for (const api of await listAll('security_api_resources')) {
+    const sourceId = resourceSourceById.get(String(api.resource_id || ''))
+    if (sourceId && String(api.data_source_id || '') !== String(sourceId)) {
+      await client.resource('security_api_resources').update({ filterByTk: api.id, values: { data_source_id: sourceId } })
+    }
+  }
+  const streamingResource = await findOne('eco_data_resources', { resource_code: 'GRID-LVF-VOLT-001' })
+  if (streamingResource) {
+    const streamingChannel = await findOne('security_api_resources', { resource_id: streamingResource.id })
+    if (streamingChannel) {
+      await client.resource('security_api_resources').update({ filterByTk: streamingChannel.id, values: {
+        api_name: '低频电压流式订阅通道',
+        channel_type: 'stream_subscription',
+        topic_name: 'measurement.low-frequency.voltage',
+        consumer_group: 'security-governance-lvf',
+        subscription_mode: 'push',
+        http_method: 'POST',
+        gateway_path: '/data-stream/resources/grid-lvf-volt-001',
+        upstream_url: null,
+        orchestrator_path: null,
+        runtime_config_json: {},
+        data_source_id: sourceIds['SRC-DCLOUD-001'],
+      } })
+    }
+  }
+  for (const fieldItem of await listAll('eco_resource_security_fields')) {
+    const resource = (await listAll('eco_data_resources')).find((item) => item.id === fieldItem.resource_id)
+    if (!resource || !resourceMetadata[String(resource.resource_code || '')]) continue
+    const code = String(fieldItem.field_code || '').toUpperCase()
+    const informationCategory = code.includes('TIME') || code.includes('DATE') ? '量测时间信息'
+      : code.includes('QUALITY') ? '量测质量信息'
+        : /(CONS_NO|METER|PSR_ID|POINT_ID|EQUIP_SRC_ID|POS_CODE)/.test(code) ? '量测标识信息' : '量测值信息'
+    const classificationLevel = fieldItem.security_level === 'core' ? '4 级高风险' : fieldItem.security_level === 'important' ? '3 级条件共享' : '2 级条件开放'
+    await client.resource('eco_resource_security_fields').update({ filterByTk: fieldItem.id, values: { information_category: informationCategory, classification_level: classificationLevel } })
   }
 }
 
@@ -897,15 +987,17 @@ async function main() {
   await ensureDictionaryViews()
   console.log('[4/7] 初始化分类树与受控标签策略')
   await ensureClassificationsAndTagPolicies()
+  console.log('[5/7] 补齐三类来源和统一治理元数据')
+  await reconcileMinimumDeliveryDemo()
   if (schemaOnly) {
-    console.log('[5/7] schema-only 模式：跳过演示数据写入')
+    console.log('[6/7] schema-only 模式：跳过旧版演示数据写入')
   } else {
-    console.log('[5/7] 初始化 API、主体、动态策略和密钥元数据')
+    console.log('[6/7] 初始化 API、主体、动态策略和密钥元数据')
     await seedData()
   }
-  console.log('[6/7] 重新执行字段元数据审计')
+  console.log('[7/7] 重新执行字段元数据审计')
   await ensureSchema()
-  console.log('[7/7] 后台读回验证')
+  console.log('[8/8] 后台读回验证')
   await verify()
 }
 

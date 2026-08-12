@@ -13,6 +13,7 @@ from app.runtime import (
     load_policy,
     load_subject_by_api_key,
     record_allowed,
+    build_resource_label_snapshot,
     runtime_trace,
 )
 
@@ -118,6 +119,33 @@ def test_missing_policy_message_identifies_policy_matching_stage():
     assert "未获准访问该 API" not in denied.value.message
 
 
+def test_region_scope_requires_explicit_region_code():
+    test_policy = policy() | {"region_scope_json": ["REGION-A"]}
+    with pytest.raises(RuntimeDenied) as denied:
+        authorize_with_policy(test_policy)
+
+    assert denied.value.code == "REGION_REQUIRED"
+    assert denied.value.risk_factors[0]["code"] == "regionRequired"
+
+
+def test_region_scope_rejects_a_region_outside_the_policy():
+    test_policy = policy() | {"region_scope_json": ["REGION-A"]}
+    with pytest.raises(RuntimeDenied) as denied:
+        authorize_with_policy(test_policy, {"regionCode": "REGION-B"})
+
+    assert denied.value.code == "SCOPE_VIOLATION"
+
+
+def test_region_scope_does_not_read_legacy_organization_scope():
+    test_policy = policy() | {
+        "organization_scope_json": ["ORG-A"],
+        "region_scope_json": ["REGION-A"],
+    }
+    context = authorize_with_policy(test_policy, {"regionCode": "REGION-A", "organizationCode": "ORG-B"})
+
+    assert context.policy["region_scope_json"] == ["REGION-A"]
+
+
 def test_disabled_subject_api_key_is_identified_before_status_rejection():
     secret = "s" * 64
     disabled_subject = {
@@ -143,6 +171,37 @@ def test_disabled_subject_api_key_is_identified_before_status_rejection():
 
     assert denied.value.code == "SUBJECT_DISABLED"
     load_policy.assert_not_called()
+
+
+def test_resource_metadata_is_included_in_runtime_label_and_classification_snapshot():
+    resource = {
+        "id": 10,
+        "protection_level": "l3",
+        "resource_tags": ["量测数据"],
+        "security_level": "4",
+        "measurement_type": "日冻结电能示值",
+        "data_granularity": "day",
+    }
+    fields = [{
+        "field_code": "CONS_NO", "security_level": "important",
+        "information_category": "量测标识信息", "classification_level": "3 级条件共享",
+        "field_tags": ["需脱敏"], "required_desensitization": True,
+        "important_field_flag": True,
+    }]
+    with patch("app.runtime.fetch_one", side_effect=[resource, {}]), \
+         patch("app.runtime.fetch_all", return_value=fields):
+        snapshot = build_resource_label_snapshot(10, "metadata-v1")
+
+    assert {"量测数据", "日冻结电能示值", "日级", "4级数据"}.issubset(snapshot["matchedLabels"])
+    assert snapshot["fieldTags"]["CONS_NO"] == ["需脱敏", "量测标识信息", "3 级条件共享", "重要字段"]
+    assert snapshot["classification"] == {
+        "securityCategoryId": None,
+        "securityLevelId": None,
+        "dataSubjectTypeId": None,
+        "dataSecurityLevel": "4",
+        "dataType": "日冻结电能示值",
+        "dataGranularity": "day",
+    }
 
 
 def test_legacy_risk_action_is_treated_as_direct_denial():

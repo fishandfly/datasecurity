@@ -11,6 +11,7 @@ const SECURITY_VALUE_LABELS: Record<string, string> = {
   draft: '草稿', enabled: '启用', disabled: '停用', connected: '已连接', unconnected: '未连接', testing: '检查中', exception: '异常',
   unpublished: '未发布', publishing: '发布中', success: '成功', failed: '失败', pending: '待执行', running: '执行中', completed: '已完成', archived: '已归档',
   internal_app: '内部应用', external_party: '外部访问方', direct: '直接纳管', develop: '数据库服务化', orchestrate: '编排增强',
+  query_service: '查询服务', stream_subscription: '流式订阅', topic_consumer: '主题消费', push: '推送', pull: '拉取', batch: '批量',
   detail: '明细', masked: '脱敏', aggregate: '聚合', encrypted: '密态', pending_validation: '待校验', expired: '已过期',
   allow: '允许', deny: '拒绝', denied: '拒绝', limit: '限制', deny_alert: '拒绝并告警', processing: '处理中', closed: '已关闭',
   normal: '正常', notice: '提示', medium: '中风险', high: '高风险', critical: '严重',

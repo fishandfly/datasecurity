@@ -1,4 +1,4 @@
-import { RefreshCw, UploadCloud } from 'lucide-react'
+import { Power, RefreshCw, UploadCloud } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { SecurityV3CollectionPage, type SecurityV3CollectionPageConfig } from './security-v3-collection-page'
 import { Button } from './ui'
@@ -6,7 +6,7 @@ import { toErrorMessage } from '../lib/nocobase-client'
 import { formatSecurityV3Value, listSecurityV3Records, type SecurityV3Record } from '../lib/nocobase-security-v3'
 import { groupSecurityLabels } from '../lib/security-label-hierarchy'
 import { selectImportantFieldEntries } from '../lib/security-log-display'
-import { publishSecurityPolicy } from '../lib/security-runtime-client'
+import { ensureDefaultSecurityApi, publishSecurityApi, publishSecurityPolicy } from '../lib/security-runtime-client'
 import { cn } from '../lib/utils'
 
 type ResourceAccessPoliciesPanelProps = {
@@ -17,6 +17,11 @@ type ResourceAccessPoliciesPanelProps = {
 
 function policyToken(value: string) {
   return value.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'RESOURCE'
+}
+
+function regionOptionValue(record: Record<string, unknown>) {
+  const code = String(record.nodeCode || '').trim()
+  return /^region-[a-z0-9-]+$/i.test(code) ? code.toUpperCase() : ''
 }
 
 function relationRecord(value: unknown) {
@@ -365,6 +370,54 @@ function ResourceAccessDecisionLogs({ resourceId }: { resourceId: string }) {
 }
 
 export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManage }: ResourceAccessPoliciesPanelProps) {
+  const [publishedApiCount, setPublishedApiCount] = useState<number | null>(null)
+  const [apiStateError, setApiStateError] = useState('')
+  const [isPublishingApi, setIsPublishingApi] = useState(false)
+  const [apiRefreshVersion, setApiRefreshVersion] = useState(0)
+
+  const refreshPublishedApiState = useCallback(async () => {
+    setApiStateError('')
+    try {
+      const apis = await listSecurityV3Records('security_api_resources', {
+        filter: { resource_id: resourceId },
+        sort: ['id'],
+      })
+      setPublishedApiCount(apis.filter((api) => api.api_status === 'enabled' && api.publish_status === 'success').length)
+      return apis
+    } catch (currentError) {
+      setPublishedApiCount(null)
+      setApiStateError(toErrorMessage(currentError, '读取当前资源服务通道状态失败'))
+      return []
+    }
+  }, [resourceId])
+
+  useEffect(() => {
+    void refreshPublishedApiState()
+  }, [refreshPublishedApiState])
+
+  const publishCurrentResourceApi = async () => {
+    setIsPublishingApi(true)
+    setApiStateError('')
+    try {
+      const ensured = await ensureDefaultSecurityApi(resourceId)
+      const apis = await listSecurityV3Records('security_api_resources', {
+        filter: { resource_id: resourceId },
+        sort: ['id'],
+      })
+      const currentApi = apis.find((api) => String(api.id) === String(ensured.id)) || apis[0]
+      if (!currentApi?.id) throw new Error('当前数据资源未生成可上线的服务通道')
+      if (currentApi.api_status !== 'enabled' || currentApi.publish_status !== 'success') {
+        await publishSecurityApi(String(currentApi.id))
+      }
+      await refreshPublishedApiState()
+      setApiRefreshVersion((value) => value + 1)
+    } catch (currentError) {
+      setApiStateError(toErrorMessage(currentError, '当前资源服务通道上线失败'))
+    } finally {
+      setIsPublishingApi(false)
+    }
+  }
+
   const config = useMemo<SecurityV3CollectionPageConfig>(() => ({
     module: 'resources',
     title: '访问策略',
@@ -379,7 +432,7 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
       { key: 'policy_code', label: '策略编码' },
       { key: 'policy_name', label: '策略名称' },
       { key: 'subject', label: '数据应用' },
-      { key: 'api_resource', label: 'API' },
+      { key: 'api_resource', label: '服务通道' },
       { key: 'output_mode', label: '输出模式' },
       { key: 'max_rows', label: '最大行数' },
       { key: 'publish_status', label: '发布状态', tone: 'status' },
@@ -390,12 +443,17 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
       { name: 'policy_code', label: '策略编码', required: true, defaultValue: `ACCESS-${policyToken(resourceCode)}-${String(Date.now()).slice(-6)}` },
       { name: 'policy_name', label: '策略名称', required: true, defaultValue: `${resourceCode} 数据访问策略` },
       { name: 'subject_id', label: '数据应用', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name', filter: { subject_status: 'enabled' } } },
-      { name: 'api_resource_id', label: '已发布 API', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name', filter: { resource_id: resourceId, api_status: 'enabled', publish_status: 'success' } } },
-      { name: 'scenario', label: '调用场景标识（请求头 X-Scenario）', required: true, defaultValue: 'resource-data-query' },
+      { name: 'api_resource_id', label: '已发布服务通道', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name', filter: { resource_id: resourceId, api_status: 'enabled', publish_status: 'success' } } },
+      { name: 'scenario', label: '使用场景', type: 'select', required: true, defaultValue: 'online-grid-measurement-query', options: [
+        { value: 'dispatch-operation-analysis', label: '调度运行分析' }, { value: 'regional-load-statistics', label: '区域负荷统计' },
+        { value: 'cross-domain-load-statistics', label: '跨域负荷统计' }, { value: 'region-load-query', label: '区域负荷查询' },
+        { value: 'online-grid-measurement-query', label: '在线电网量测查询' }, { value: 'online-grid-lvf-voltage', label: '在线低频电压查询' },
+        { value: 'marketing-2-daily-energy', label: '营销日冻结电量查询' }, { value: 'marketing-2-energy-curve', label: '营销电能示值曲线查询' },
+        { value: 'cross-domain-encrypted', label: '跨域密态数据访问' },
+      ] },
       { name: 'source_ips_json', label: '允许来源 IP/CIDR', type: 'string-list', defaultValue: [] },
       { name: 'allowed_time_ranges_json', label: '允许调用时段', type: 'time-ranges', defaultValue: [] },
-      { name: 'organization_scope_json', label: '组织范围', type: 'string-list', defaultValue: [] },
-      { name: 'region_scope_json', label: '区域范围', type: 'string-list', defaultValue: [] },
+      { name: 'region_scope_json', label: '区域范围', type: 'relation-list', relation: { collection: 'jcCategoryTreeNodes', labelKey: 'nodeName', filter: { typeCode: 'eco_region_categories' }, optionValue: regionOptionValue }, defaultValue: [] },
       { name: 'output_mode', label: '输出模式', type: 'select', required: true, defaultValue: 'detail', options: [{ value: 'detail', label: '明细' }, { value: 'masked', label: '脱敏明细' }, { value: 'aggregate', label: '聚合结果' }, { value: 'encrypted', label: '密态结果' }] },
       { name: 'max_requests_per_minute', label: '每分钟请求上限', type: 'number', required: true, defaultValue: 60 },
       { name: 'max_query_days', label: '最大查询天数', type: 'number', required: true, defaultValue: 1 },
@@ -436,9 +494,20 @@ export function ResourceAccessPoliciesPanel({ resourceId, resourceCode, canManag
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
-        API Key 鉴权与主体 API 授权在数据应用中先行完成；这里只维护数据资源级策略：场景、来源 IP、时段、组织/区域范围、输出模式、查询与频率上限，以及异常访问的允许/拒绝决策。字段范围由 API 发布配置统一控制，不在访问策略中重复授权。
+        API Key 鉴权与主体服务通道授权在数据应用中先行完成；这里只维护数据资源级策略：场景、来源 IP、时段、区域范围、输出模式、查询与频率上限，以及异常访问的允许/拒绝决策。策略仅可绑定已上线服务通道，字段范围或订阅方式由通道发布配置统一控制。
       </div>
-      <SecurityV3CollectionPage config={config} embedded />
+      {publishedApiCount === 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-warning-text)]">
+          <span>当前资源尚无已上线服务通道，因此“已发布服务通道”下拉框暂无可选项。</span>
+          {canManage ? (
+            <button type="button" disabled={isPublishingApi} onClick={() => void publishCurrentResourceApi()} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[6px] border border-[var(--status-warning-border)] bg-[var(--surface)] px-3 text-[0.75rem] font-semibold text-[var(--status-warning-text)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60">
+              <Power className={cn('h-3.5 w-3.5', isPublishingApi && 'animate-pulse')} />{isPublishingApi ? '上线中...' : '上线当前资源通道'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {apiStateError ? <div className="rounded-[8px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-3 text-[0.8125rem] text-[var(--status-danger-text)]">{apiStateError}</div> : null}
+      <SecurityV3CollectionPage key={`${resourceId}:${apiRefreshVersion}`} config={config} embedded />
       <ResourceAccessDecisionLogs resourceId={resourceId} />
     </div>
   )

@@ -18,7 +18,7 @@ export function SecurityRuntimeStatusAction() {
   const [error, setError] = useState('')
   const configurationMetrics: Array<[string, number, LucideIcon]> = [
     ['活动数据源', health?.configuration.sources ?? 0, Database],
-    ['已发布 API', health?.configuration.apis ?? 0, ServerCog],
+    ['已发布服务通道', health?.configuration.apis ?? 0, ServerCog],
     ['已发布策略', health?.configuration.policies ?? 0, ShieldCheck],
     ['活动主体', health?.configuration.subjects ?? 0, Activity],
   ]

@@ -102,6 +102,8 @@ function CopyButton({ value, label = '复制' }: { value: string; label?: string
 
 export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelProps) {
   const [api, setApi] = useState<SecurityV3Record | null>(null)
+  const [scenarios, setScenarios] = useState<string[]>([])
+  const [scenario, setScenario] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -118,10 +120,23 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
         appends: ['data_source'],
         sort: ['id'],
       })
-      setApi(records[0] ?? null)
+      const currentApi = records[0] ?? null
+      setApi(currentApi)
+      if (currentApi?.id) {
+        const policies = await listSecurityV3Records('eco_resource_security_policies', {
+          filter: { api_resource_id: currentApi.id, policy_kind: 'access_policy', policy_status: 'enabled', publish_status: 'success' },
+          sort: ['policy_code'],
+        })
+        const availableScenarios = Array.from(new Set(policies.map((item) => String(item.scenario || '').trim()).filter(Boolean)))
+        setScenarios(availableScenarios)
+        setScenario((current) => availableScenarios.includes(current) ? current : availableScenarios[0] || '')
+      } else {
+        setScenarios([])
+        setScenario('')
+      }
     } catch (currentError) {
       setApi(null)
-      setError(toErrorMessage(currentError, '读取查询 API 信息失败'))
+      setError(toErrorMessage(currentError, '读取数据服务通道信息失败'))
     } finally {
       setIsLoading(false)
     }
@@ -145,28 +160,36 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
     [runtimeConfig],
   )
   const parameters = useMemo<ParameterItem[]>(() => [
-    ...queryParams.map((name) => ({
+    ...Array.from(new Set([...(String(runtimeConfig.regionFieldCode || runtimeConfig.region_field_code || '').trim() ? ['regionCode'] : []), ...queryParams])).map((name) => ({
       name,
       type: valueType(defaultParams[name]),
-      required: defaultParams[name] === undefined || defaultParams[name] === null || defaultParams[name] === '',
+      required: name === 'regionCode' || defaultParams[name] === undefined || defaultParams[name] === null || defaultParams[name] === '',
       defaultValue: defaultParams[name] === undefined ? '' : String(defaultParams[name]),
       description: parameterDescription(name),
     })),
     { name: 'page', type: 'integer', required: false, defaultValue: '1', description: '分页页码，从 1 开始。' },
     { name: 'pageSize', type: 'integer', required: false, defaultValue: '100', description: '每页返回数量，最终受访问策略限制，最大不超过 1000。' },
     { name: 'fields', type: 'string', required: false, defaultValue: defaultFields.join(','), description: '指定输出字段，多个字段编码使用英文逗号分隔；留空返回默认字段。' },
-  ], [defaultFields, defaultParams, queryParams])
+  ], [defaultFields, defaultParams, queryParams, runtimeConfig.regionFieldCode, runtimeConfig.region_field_code])
 
   const gatewayPath = String(api?.gateway_path || '')
+  const isStreaming = ['stream_subscription', 'topic_consumer'].includes(String(api?.channel_type || 'query_service'))
   const accessUrl = gatewayPath
     ? `${window.location.origin}/security-runtime-api${gatewayPath}`
     : ''
+  const subscriptionUrl = accessUrl ? `${accessUrl}/subscribe` : ''
+  const subscriptionExampleUrl = subscriptionUrl ? `${subscriptionUrl}?regionCode={regionCode}` : ''
   const exampleUrl = useMemo(() => buildExampleUrl(accessUrl, parameters), [accessUrl, parameters])
-  const examples = useMemo<Record<ExampleLanguage, string>>(() => ({
-    curl: [`curl --request GET '${exampleUrl}' \\`, "  --header 'X-API-Key: $API_KEY' \\", "  --header 'X-Scenario: resource-data-query'"].join('\n'),
-    python: `import os\nimport requests\n\nurl = '${exampleUrl}'\nheaders = {\n    'X-API-Key': os.environ['API_KEY'],\n    'X-Scenario': 'resource-data-query',\n}\n\nresponse = requests.get(url, headers=headers, timeout=30)\nresponse.raise_for_status()\nprint(response.json())`,
-    javascript: `const response = await fetch('${exampleUrl}', {\n  method: 'GET',\n  headers: {\n    'X-API-Key': process.env.API_KEY,\n    'X-Scenario': 'resource-data-query',\n  },\n})\n\nif (!response.ok) throw new Error(\`HTTP \${response.status}\`)\nconsole.log(await response.json())`,
-  }), [exampleUrl])
+  const examples = useMemo<Record<ExampleLanguage, string>>(() => {
+    const scenarioHeader = scenario || '{已发布场景}'
+    const url = isStreaming ? subscriptionExampleUrl : exampleUrl
+    const method = isStreaming ? 'POST' : 'GET'
+    return {
+      curl: [`curl --request ${method} '${url}' \\`, "  --header 'X-API-Key: $API_KEY' \\", `  --header 'X-Scenario: ${scenarioHeader}'`].join('\n'),
+      python: `import os\nimport requests\n\nurl = '${url}'\nheaders = {\n    'X-API-Key': os.environ['API_KEY'],\n    'X-Scenario': '${scenarioHeader}',\n}\n\nresponse = requests.${isStreaming ? 'post' : 'get'}(url, headers=headers, timeout=30)\nresponse.raise_for_status()\nprint(response.json())`,
+      javascript: `const response = await fetch('${url}', {\n  method: '${method}',\n  headers: {\n    'X-API-Key': process.env.API_KEY,\n    'X-Scenario': '${scenarioHeader}',\n  },\n})\n\nif (!response.ok) throw new Error(\`HTTP \${response.status}\`)\nconsole.log(await response.json())`,
+    }
+  }, [exampleUrl, isStreaming, scenario, subscriptionExampleUrl])
 
   const isOnline = api?.api_status === 'enabled' && api?.publish_status === 'success'
   const runAction = async (action: 'publish' | 'unpublish') => {
@@ -177,27 +200,27 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
     try {
       if (action === 'publish') {
         const result = await publishSecurityApi(String(api.id))
-        setNotice(`API 已上线，当前版本 V${result.publishVersion}`)
+        setNotice(`数据服务通道已上线，当前版本 V${result.publishVersion}`)
       } else {
         await unpublishSecurityApi(String(api.id))
-        setNotice('API 已下线，访问地址已停止提供服务。')
+        setNotice('数据服务通道已下线，服务地址已停止提供。')
       }
       await load()
     } catch (currentError) {
-      setError(toErrorMessage(currentError, action === 'publish' ? 'API 上线失败' : 'API 下线失败'))
+      setError(toErrorMessage(currentError, action === 'publish' ? '服务通道上线失败' : '服务通道下线失败'))
     } finally {
       setIsActing(false)
     }
   }
 
   if (isLoading && !api) {
-    return <div className="rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-12 text-center text-[0.875rem] text-[var(--text-muted)]">正在生成并读取唯一查询 API...</div>
+    return <div className="rounded-[14px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] px-4 py-12 text-center text-[0.875rem] text-[var(--text-muted)]">正在生成并读取数据服务通道...</div>
   }
 
   if (!api) {
     return (
       <div className="rounded-[14px] border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-4 py-5 text-[0.875rem] leading-7 text-[var(--status-warning-text)]">
-        {error || '完整维护数据资源、基准物理表和字段后，系统将自动生成唯一查询 API。'}
+        {error || '完整维护数据资源、基准物理表和字段后，系统将自动生成查询服务通道。'}
       </div>
     )
   }
@@ -218,7 +241,7 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
                 </span>
                 <span className="text-[0.75rem] text-[var(--text-muted)]">V{Number(api.publish_version || 0)}</span>
               </div>
-              <h3 className="mt-3 text-[1.25rem] font-semibold text-[var(--text-main)]">{String(api.api_name || '资源查询 API')}</h3>
+              <h3 className="mt-3 text-[1.25rem] font-semibold text-[var(--text-main)]">{String(api.api_name || '资源查询服务通道')}</h3>
               <div className="mt-1 font-mono text-[0.75rem] text-[var(--text-muted)]">{String(api.api_code || '')}</div>
             </div>
             {canManage ? (
@@ -229,7 +252,7 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
                 className={`inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full px-4 text-[0.8125rem] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${isOnline ? 'border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] text-[var(--status-danger-text)] hover:brightness-95' : 'bg-[linear-gradient(180deg,var(--theme-nav-start),var(--theme-nav-end))] text-white shadow-[0_10px_22px_rgba(var(--theme-strong-rgb),0.2)] hover:-translate-y-[1px]'}`}
               >
                 {isActing ? <RefreshCw className="h-4 w-4 animate-spin" /> : isOnline ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                {isOnline ? 'API 下线' : 'API 上线'}
+                {isOnline ? '通道下线' : '通道上线'}
               </button>
             ) : null}
           </div>
@@ -239,21 +262,21 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
           <div>
             <div className="mb-2 flex items-center gap-2 text-[0.8125rem] font-semibold text-[var(--text-secondary)]">
               <ExternalLink className="h-4 w-4 text-[var(--primary)]" />
-              API 访问地址
+              {isStreaming ? '受控订阅地址' : '查询服务地址'}
             </div>
             <div className="flex flex-col gap-3 rounded-[12px] border border-[var(--surface-outline)] bg-[var(--surface-muted)] px-4 py-3 sm:flex-row sm:items-center">
-              <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-[0.8125rem] text-[var(--text-main)]">{accessUrl}</code>
-              <CopyButton value={accessUrl} />
+              <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-[0.8125rem] text-[var(--text-main)]">{isStreaming ? subscriptionExampleUrl : accessUrl}</code>
+              <CopyButton value={isStreaming ? subscriptionExampleUrl : accessUrl} />
             </div>
-            <div className="mt-2 text-[0.75rem] text-[var(--text-muted)]">网关相对路径：<code>{gatewayPath}</code>；生产环境请将当前站点域名替换为实际安全网关域名。</div>
+            <div className="mt-2 text-[0.75rem] text-[var(--text-muted)]">网关相对路径：<code>{gatewayPath}</code>；{isStreaming ? '区域范围策略已启用时，订阅请求必须传入 regionCode。' : ''}生产环境请将当前站点域名替换为实际安全网关域名。</div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
-              ['发布方式', formatSecurityV3Value(api.access_mode)],
-              ['请求方法', String(api.http_method || 'GET')],
+              ['通道类型', formatSecurityV3Value(api.channel_type || 'query_service')],
+              [isStreaming ? '订阅模式' : '请求方法', isStreaming ? formatSecurityV3Value(api.subscription_mode || 'push') : String(api.http_method || 'GET')],
               ['最近上线', displayDateTime(api.published_at)],
-              ['关联数据源', formatSecurityV3Value(api.data_source)],
+              [isStreaming ? '流式主题' : '关联数据源', isStreaming ? String(api.topic_name || '未配置') : formatSecurityV3Value(api.data_source)],
             ].map(([label, value]) => (
               <div key={label} className="rounded-[12px] border border-[var(--surface-outline)] bg-[var(--surface-muted)] px-4 py-3">
                 <div className="text-[0.6875rem] text-[var(--text-muted)]">{label}</div>
@@ -264,7 +287,7 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
         </div>
       </section>
 
-      <section className="rounded-[18px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] p-5 shadow-[var(--shadow-soft)]">
+      {!isStreaming ? <section className="rounded-[18px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] p-5 shadow-[var(--shadow-soft)]">
         <div className="flex items-center gap-2">
           <Code2 className="h-4 w-4 text-[var(--primary)]" />
           <h3 className="text-[1rem] font-semibold text-[var(--text-main)]">请求参数说明</h3>
@@ -287,7 +310,12 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
             </div>
           ))}
         </div>
-      </section>
+      </section> : (
+        <section className="rounded-[18px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] p-5 shadow-[var(--shadow-soft)]">
+          <div className="flex items-center gap-2"><Code2 className="h-4 w-4 text-[var(--primary)]" /><h3 className="text-[1rem] font-semibold text-[var(--text-main)]">订阅配置</h3></div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">{[['流式主题', String(api.topic_name || '未配置')], ['消费组', String(api.consumer_group || '未配置')], ['订阅模式', formatSecurityV3Value(api.subscription_mode || 'push')]].map(([label, value]) => <div key={label} className="rounded-[12px] border border-[var(--surface-outline)] bg-[var(--surface-muted)] px-4 py-3"><div className="text-[0.6875rem] text-[var(--text-muted)]">{label}</div><div className="mt-1 break-all font-mono text-[0.8125rem] font-semibold text-[var(--text-main)]">{value}</div></div>)}</div>
+        </section>
+      )}
 
       <section className="rounded-[18px] border border-[var(--surface-outline)] bg-[var(--surface-raised)] p-5 shadow-[var(--shadow-soft)]">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -296,11 +324,11 @@ export function ResourceApisPanel({ resourceId, canManage }: ResourceApisPanelPr
               <ShieldCheck className="h-4 w-4 text-[var(--primary)]" />
               <h3 className="text-[1rem] font-semibold text-[var(--text-main)]">访问鉴权</h3>
             </div>
-            <div className="mt-2 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">调用方需要获得当前 API 授权，并在请求头中传入 API Key 和调用场景。</div>
+            <div className="mt-2 text-[0.8125rem] leading-6 text-[var(--text-secondary)]">调用方需要获得当前服务通道授权，并在请求头中传入 API Key 和已发布的调用场景。{isStreaming ? '订阅建立与后续续租均经过策略校验；系统不在此处保存或返回消息中台凭据。' : <>配置区域范围的策略还必须显式传入 <code>regionCode</code>。</>}</div>
           </div>
           <div className="grid gap-2 text-[0.75rem] sm:min-w-[360px]">
             <code className="rounded-[8px] bg-[var(--surface-muted)] px-3 py-2 text-[var(--text-main)]">X-API-Key: $API_KEY</code>
-            <code className="rounded-[8px] bg-[var(--surface-muted)] px-3 py-2 text-[var(--text-main)]">X-Scenario: resource-data-query</code>
+            {scenarios.length ? <select aria-label="调用场景" value={scenario} onChange={(event) => setScenario(event.target.value)} className="h-10 rounded-[8px] border border-[var(--surface-outline)] bg-[var(--surface-muted)] px-3 font-mono text-[0.75rem] text-[var(--text-main)] outline-none focus:border-[var(--primary)]">{scenarios.map((item) => <option key={item} value={item}>X-Scenario: {item}</option>)}</select> : <code className="rounded-[8px] bg-[var(--surface-muted)] px-3 py-2 text-[var(--text-main)]">X-Scenario: {'{已发布场景}'}</code>}
           </div>
         </div>
       </section>

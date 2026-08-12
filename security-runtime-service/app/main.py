@@ -18,6 +18,7 @@ from .runtime import (
     aggregate_measurements,
     authorize,
     execute_data_api,
+    open_stream_subscription,
     publish_api,
     publish_policy,
     ensure_resource_api,
@@ -295,6 +296,67 @@ async def data_api(request: Request):
             duration_ms=duration_ms,
             error=denied,
         )
+        return _error(denied.status, denied.code, denied.message, denied.request_id)
+
+
+@app.post("/data-stream/{path:path}")
+async def data_stream_subscription(request: Request):
+    """Authorize a streaming lease; the production adapter consumes the actual topic."""
+    started_at = time.perf_counter()
+    body = await request.body()
+    context = None
+    try:
+        context = authorize(request, body)
+        if not request.url.path.endswith('/subscribe'):
+            raise _denied_after_context('ROUTE_NOT_FOUND', context, context.request_id)
+        payload = open_stream_subscription(context)
+        duration_ms = round((time.perf_counter() - started_at) * 1000)
+        record_allowed(context, 0, duration_ms)
+        _safe_log_runtime_access(
+            decision="allow",
+            status=200,
+            duration_ms=duration_ms,
+            context=context,
+        )
+        return JSONResponse(
+            content=payload,
+            headers={
+                "X-Request-Id": context.request_id,
+                "X-Decision": "allow",
+                "X-Risk-Level": context.level,
+            },
+        )
+    except RuntimeDenied as error:
+        duration_ms = round((time.perf_counter() - started_at) * 1000)
+        try:
+            record_denied(error, duration_ms)
+        except Exception:
+            pass
+        _safe_log_runtime_access(
+            decision="deny",
+            status=error.status,
+            duration_ms=duration_ms,
+            error=error,
+        )
+        return _error(error.status, error.code, error.message, error.request_id)
+    except (ValueError, PermissionError) as error:
+        code = str(error) if str(error) in {"VALIDATION_ERROR", "POLICY_NOT_FOUND"} else "VALIDATION_ERROR"
+        denied = _denied_after_context(code, context, context.request_id if context else str(uuid4()))
+        duration_ms = round((time.perf_counter() - started_at) * 1000)
+        try:
+            record_denied(denied, duration_ms)
+        except Exception:
+            pass
+        _safe_log_runtime_access(decision="deny", status=denied.status, duration_ms=duration_ms, error=denied)
+        return _error(denied.status, denied.code, denied.message, denied.request_id)
+    except Exception:
+        denied = _denied_after_context("INTERNAL_ERROR", context, context.request_id if context else str(uuid4()))
+        duration_ms = round((time.perf_counter() - started_at) * 1000)
+        try:
+            record_denied(denied, duration_ms)
+        except Exception:
+            pass
+        _safe_log_runtime_access(decision="deny", status=denied.status, duration_ms=duration_ms, error=denied)
         return _error(denied.status, denied.code, denied.message, denied.request_id)
 
 

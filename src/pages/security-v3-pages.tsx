@@ -10,6 +10,22 @@ import { publishSecurityApi, publishSecurityPolicy } from '../lib/security-runti
 const enabledOptions: SecurityV3Option[] = [{ value: 'draft', label: '草稿' }, { value: 'enabled', label: '启用' }, { value: 'disabled', label: '停用' }]
 const outputOptions: SecurityV3Option[] = [{ value: 'detail', label: '明细' }, { value: 'masked', label: '脱敏' }, { value: 'aggregate', label: '聚合' }, { value: 'encrypted', label: '密态' }]
 const homomorphicAlgorithmOptions: SecurityV3Option[] = [{ value: 'bfv', label: '整数精确型' }, { value: 'ckks', label: '浮点近似型' }]
+const accessScenarioOptions: SecurityV3Option[] = [
+  { value: 'dispatch-operation-analysis', label: '调度运行分析' },
+  { value: 'regional-load-statistics', label: '区域负荷统计' },
+  { value: 'cross-domain-load-statistics', label: '跨域负荷统计' },
+  { value: 'region-load-query', label: '区域负荷查询' },
+  { value: 'online-grid-measurement-query', label: '在线电网量测查询' },
+  { value: 'online-grid-lvf-voltage', label: '在线低频电压查询' },
+  { value: 'marketing-2-daily-energy', label: '营销日冻结电量查询' },
+  { value: 'marketing-2-energy-curve', label: '营销电能示值曲线查询' },
+  { value: 'cross-domain-encrypted', label: '跨域密态数据访问' },
+]
+
+function regionOptionValue(record: Record<string, unknown>) {
+  const code = String(record.nodeCode || '').trim()
+  return /^region-[a-z0-9-]+$/i.test(code) ? code.toUpperCase() : ''
+}
 
 function homomorphicAlgorithmLabel(value: unknown) {
   return ['ckks', 'float_approx'].includes(String(value || '').toLowerCase()) ? '浮点近似型' : '整数精确型'
@@ -25,26 +41,29 @@ function formatLocalDateTime(value: unknown) {
 }
 
 const apiResourcesConfig: SecurityV3CollectionPageConfig = {
-  module: 'services', title: 'API 资源', collection: 'security_api_resources', appends: ['resource', 'data_source'],
-  columns: [{ key: 'api_code', label: 'API 编码' }, { key: 'api_name', label: 'API 名称' }, { key: 'access_mode', label: '接入模式' }, { key: 'resource', label: '数据资源' }, { key: 'data_source', label: '数据源' }, { key: 'gateway_path', label: '发布路径' }, { key: 'publish_status', label: '发布状态', tone: 'status' }],
+  module: 'services', title: '数据服务通道', collection: 'security_api_resources', appends: ['resource', 'data_source'],
+  columns: [{ key: 'api_code', label: '通道编码' }, { key: 'api_name', label: '通道名称' }, { key: 'channel_type', label: '通道类型' }, { key: 'resource', label: '数据资源' }, { key: 'data_source', label: '数据源' }, { key: 'gateway_path', label: '服务地址' }, { key: 'publish_status', label: '发布状态', tone: 'status' }],
   fields: [
-    { name: 'api_code', label: 'API 编码', required: true }, { name: 'api_name', label: 'API 名称', required: true },
+    { name: 'api_code', label: '通道编码', required: true }, { name: 'api_name', label: '通道名称', required: true },
     { name: 'resource_id', label: '数据资源', required: true, relation: { collection: 'eco_data_resources', labelKey: 'resource_name' } },
     { name: 'data_source_id', label: '数据源', relation: { collection: 'security_data_sources', labelKey: 'source_name' } },
+    { name: 'channel_type', label: '通道类型', type: 'select', required: true, defaultValue: 'query_service', options: [{ value: 'query_service', label: '查询服务' }, { value: 'stream_subscription', label: '流式订阅' }, { value: 'topic_consumer', label: '主题消费' }] },
+    { name: 'topic_name', label: '流式主题' }, { name: 'consumer_group', label: '消费组' },
+    { name: 'subscription_mode', label: '订阅模式', type: 'select', defaultValue: 'push', options: [{ value: 'push', label: '推送' }, { value: 'pull', label: '拉取' }, { value: 'batch', label: '批量' }] },
     { name: 'access_mode', label: '接入模式', type: 'select', required: true, options: [{ value: 'direct', label: '直接纳管' }, { value: 'develop', label: '数据库服务化' }, { value: 'orchestrate', label: '编排增强' }] },
     { name: 'http_method', label: '请求方法', type: 'select', options: [{ value: 'GET', label: 'GET' }, { value: 'POST', label: 'POST' }], defaultValue: 'GET' },
     { name: 'upstream_url', label: '上游地址' }, { name: 'orchestrator_path', label: '处理路径' }, { name: 'gateway_path', label: '发布路径', required: true },
     { name: 'protection_level', label: '防护层', type: 'select', options: [{ value: 'l1', label: '普通共享层' }, { value: 'l2', label: '内部受控层' }, { value: 'l3', label: '跨域密态层' }], defaultValue: 'l2' },
     { name: 'supports_row_filter', label: '支持行过滤', type: 'boolean' }, { name: 'supports_field_filter', label: '支持字段过滤', type: 'boolean' },
     { name: 'supports_aggregate', label: '支持聚合', type: 'boolean' }, { name: 'supports_homomorphic', label: '支持密态任务', type: 'boolean' },
-    { name: 'api_status', label: 'API 状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
+    { name: 'api_status', label: '通道状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
   ],
   transformSaveValues: (values) => ({ ...values, publish_status: 'unpublished', publish_error: null }),
   rowActions: [{
     key: 'publish-api', title: '校验并发布', icon: UploadCloud,
     execute: async (record) => {
       const result = await publishSecurityApi(String(record.id || ''))
-      return `API 已发布，版本 ${result.publishVersion}`
+      return `数据服务通道已发布，版本 ${result.publishVersion}`
     },
   }],
   extraActions: <SecurityRuntimeStatusAction />,
@@ -73,7 +92,7 @@ const ingestLogsBase: Omit<SecurityV3CollectionPageConfig, 'title' | 'filter'> =
     { name: 'batch_code', label: '批次编号', readOnly: true },
     { name: 'execution_type', label: '执行类型', type: 'select', readOnly: true, options: [{ value: 'connection_test', label: '连接检查' }, { value: 'validation', label: '数据校验' }, { value: 'resource_delivery_validation', label: '资源交付校验' }, { value: 'tagging', label: '标签执行' }] },
     { name: 'data_source_id', label: '数据源', readOnly: true, relation: { collection: 'security_data_sources', labelKey: 'source_name' } },
-    { name: 'api_resource_id', label: 'API 资源', readOnly: true, relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
+    { name: 'api_resource_id', label: '数据服务通道', readOnly: true, relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
     { name: 'rule_version', label: '规则版本', type: 'number', readOnly: true },
     { name: 'started_at', label: '开始时间', type: 'datetime', readOnly: true },
     { name: 'finished_at', label: '完成时间', type: 'datetime', readOnly: true },
@@ -89,13 +108,13 @@ const ingestLogsBase: Omit<SecurityV3CollectionPageConfig, 'title' | 'filter'> =
 
 const subjectsConfig: SecurityV3CollectionPageConfig = {
   module: 'access', title: '数据应用', collection: 'security_access_subjects',
-  columns: [{ key: 'subject_code', label: '主体编码' }, { key: 'subject_name', label: '主体名称' }, { key: 'subject_type', label: '主体类型' }, { key: 'organization_name', label: '所属组织' }, { key: 'allowed_api_codes_json', label: '授权 API' }, { key: 'subject_status', label: '状态', tone: 'status' }],
+  columns: [{ key: 'subject_code', label: '主体编码' }, { key: 'subject_name', label: '主体名称' }, { key: 'subject_type', label: '主体类型' }, { key: 'organization_name', label: '所属组织' }, { key: 'allowed_api_codes_json', label: '授权服务通道' }, { key: 'subject_status', label: '状态', tone: 'status' }],
   fields: [
     { name: 'subject_code', label: '主体编码', required: true }, { name: 'subject_name', label: '主体名称', required: true },
     { name: 'subject_type', label: '主体类型', type: 'select', required: true, options: [{ value: 'internal_app', label: '内部应用' }, { value: 'external_party', label: '外部访问方' }] },
     { name: 'organization_code', label: '组织编码', required: true }, { name: 'organization_name', label: '组织名称', required: true },
     { name: 'credential_ref', label: 'API Key 安全引用', required: true },
-    { name: 'allowed_api_codes_json', label: '授权 API 编码列表', type: 'string-list', required: true, defaultValue: [] },
+    { name: 'allowed_api_codes_json', label: '授权服务通道编码列表', type: 'string-list', required: true, defaultValue: [] },
     { name: 'ip_whitelist_json', label: 'IP 白名单', type: 'string-list', defaultValue: [] }, { name: 'subject_status', label: '主体状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
     { name: 'valid_from', label: '生效时间', type: 'datetime' }, { name: 'valid_to', label: '失效时间', type: 'datetime' },
   ],
@@ -108,10 +127,10 @@ const policiesConfig: SecurityV3CollectionPageConfig = {
     { name: 'policy_code', label: '策略编码', required: true }, { name: 'policy_name', label: '策略名称', required: true }, { name: 'policy_kind', label: '策略类型', hidden: true, defaultValue: 'access_policy' },
     { name: 'resource_id', label: '数据资源', required: true, relation: { collection: 'eco_data_resources', labelKey: 'resource_name' } },
     { name: 'subject_id', label: '数据应用', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name' } },
-    { name: 'api_resource_id', label: 'API', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
-    { name: 'scenario', label: '使用场景', required: true }, { name: 'source_ips_json', label: '来源 IP 范围', type: 'string-list', defaultValue: [] }, { name: 'allowed_time_ranges_json', label: '允许时段', type: 'time-ranges', defaultValue: [] },
+    { name: 'api_resource_id', label: '数据服务通道', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name' } },
+    { name: 'scenario', label: '使用场景', type: 'select', options: accessScenarioOptions, required: true }, { name: 'source_ips_json', label: '来源 IP 范围', type: 'string-list', defaultValue: [] }, { name: 'allowed_time_ranges_json', label: '允许时段', type: 'time-ranges', defaultValue: [] },
     { name: 'max_requests_per_minute', label: '每分钟请求上限', type: 'number', defaultValue: 60 }, { name: 'max_query_days', label: '最大查询天数', type: 'number', defaultValue: 1 }, { name: 'max_rows', label: '最大返回行数', type: 'number', defaultValue: 1000 },
-    { name: 'organization_scope_json', label: '组织范围', type: 'string-list', defaultValue: [] }, { name: 'region_scope_json', label: '区域范围', type: 'string-list', defaultValue: [] },
+    { name: 'region_scope_json', label: '区域范围', type: 'relation-list', relation: { collection: 'jcCategoryTreeNodes', labelKey: 'nodeName', filter: { typeCode: 'eco_region_categories' }, optionValue: regionOptionValue }, defaultValue: [] },
     { name: 'output_mode', label: '输出模式', type: 'select', options: outputOptions, required: true }, { name: 'policy_status', label: '策略状态', type: 'select', options: enabledOptions, defaultValue: 'draft' },
     { name: 'abnormal_access_rules_json', label: '异常访问决策规则', type: 'abnormal-rules', required: true, defaultValue: { offHours: { enabled: true, action: 'deny' }, highFrequency: { enabled: true, action: 'deny' }, queryRangeExceeded: { enabled: true, action: 'deny' }, rowLimitExceeded: { enabled: true, action: 'deny' }, scopeViolation: { enabled: true, action: 'deny' } } },
   ],
@@ -132,7 +151,7 @@ const policiesConfig: SecurityV3CollectionPageConfig = {
 
 const auditConfig: SecurityV3CollectionPageConfig = {
   module: 'access', title: '调用与决策日志', collection: 'security_policy_decision_logs', readOnly: true, appends: ['subject', 'api_resource', 'policy'],
-  columns: [{ key: 'request_id', label: '请求编号' }, { key: 'requested_at', label: '请求时间' }, { key: 'subject', label: '数据应用' }, { key: 'api_resource', label: 'API 资源' }, { key: 'decision_result', label: '决策', tone: 'status' }, { key: 'risk_level', label: '风险级别', tone: 'status' }, { key: 'returned_rows', label: '返回行数' }, { key: 'duration_ms', label: '耗时(ms)' }],
+  columns: [{ key: 'request_id', label: '请求编号' }, { key: 'requested_at', label: '请求时间' }, { key: 'subject', label: '数据应用' }, { key: 'api_resource', label: '数据服务通道' }, { key: 'decision_result', label: '决策', tone: 'status' }, { key: 'risk_level', label: '风险级别', tone: 'status' }, { key: 'returned_rows', label: '返回行数' }, { key: 'duration_ms', label: '耗时(ms)' }],
 }
 
 const keysConfig: SecurityV3CollectionPageConfig = {
@@ -154,7 +173,7 @@ const homomorphicTasksConfig: SecurityV3CollectionPageConfig = {
   canEdit: (record) => record.task_status === 'pending',
   columns: [
     { key: 'task_code', label: '任务编号' }, { key: 'task_name', label: '任务名称' }, { key: 'subject', label: '外部访问方' },
-    { key: 'api_resource', label: '量测数据 API' }, { key: 'measure_field_code', label: '量测字段' },
+    { key: 'api_resource', label: '量测服务通道' }, { key: 'measure_field_code', label: '量测字段' },
     { key: 'algorithm', label: '算法类型', value: (record) => homomorphicAlgorithmLabel(record.algorithm) },
     { key: 'operation', label: '计算操作', value: (record) => record.operation === 'mean' ? '平均值' : '求和' },
     { key: 'sample_count', label: '样本数' }, { key: 'task_status', label: '状态', tone: 'status' },
@@ -164,7 +183,7 @@ const homomorphicTasksConfig: SecurityV3CollectionPageConfig = {
     { name: 'task_name', label: '任务名称', required: true },
     { name: 'subject_id', label: '外部访问方', required: true, relation: { collection: 'security_access_subjects', labelKey: 'subject_name', filter: { subject_type: 'external_party', subject_status: 'enabled' } } },
     { name: 'idempotency_key', label: '幂等键' },
-    { name: 'api_resource_id', label: '量测数据 API', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name', filter: { supports_homomorphic: true, api_status: 'enabled' } } },
+    { name: 'api_resource_id', label: '量测服务通道', required: true, relation: { collection: 'security_api_resources', labelKey: 'api_name', filter: { supports_homomorphic: true, api_status: 'enabled' } } },
     { name: 'measure_field_code', label: '量测字段编码', required: true },
     { name: 'algorithm', label: '算法类型', type: 'select', options: homomorphicAlgorithmOptions, required: true, defaultValue: 'ckks' },
     { name: 'region_scope_json', label: '区域范围', type: 'json', required: true, defaultValue: [] },

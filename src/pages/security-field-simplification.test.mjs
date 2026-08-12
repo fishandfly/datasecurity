@@ -6,6 +6,9 @@ import test from 'node:test'
 const spec = JSON.parse(readFileSync(resolve(process.cwd(), 'scripts/base-collections-spec.json'), 'utf8'))
 const runtimeSource = readFileSync(resolve(process.cwd(), 'security-runtime-service/app/runtime.py'), 'utf8')
 const modelSource = readFileSync(resolve(process.cwd(), 'scripts/security-field-model.mjs'), 'utf8')
+const migrationSource = readFileSync(resolve(process.cwd(), 'scripts/migrate-nocobase-v3.mjs'), 'utf8')
+const resourceEditSource = readFileSync(resolve(process.cwd(), 'src/lib/nocobase-resource-edit.ts'), 'utf8')
+const resourceDialogSource = readFileSync(resolve(process.cwd(), 'src/components/resource-edit-dialog.tsx'), 'utf8')
 
 function fieldNames(collectionName) {
   return new Set(spec.find((collection) => collection.name === collectionName)?.fields.map((field) => field.name) || [])
@@ -33,4 +36,25 @@ test('动态策略只允许资源、应用和 API 的精确匹配', () => {
   assert.match(runtimeSource, /policy\.api_resource_id = current_api\.id/)
   assert.doesNotMatch(runtimeSource, /label_group/)
   assert.match(modelSource, /DEPRECATED_SECURITY_FIELDS/)
+})
+
+test('资源级元数据收敛为安全等级、数据类型和数据粒度', () => {
+  for (const field of ['security_level', 'measurement_type', 'data_granularity']) {
+    assert.match(migrationSource, new RegExp(`field\\.(?:select|input)\\('${field}'`))
+    assert.match(resourceEditSource, new RegExp(`${field}:`))
+  }
+
+  for (const field of ['business_domain', 'sub_domain', 'asset_id', 'contains_pii', 'share_scope', 'trust_zone', 'consumer_scene', 'retention_policy', 'algorithm_profile']) {
+    assert.match(modelSource, new RegExp(`'${field}'`))
+    assert.doesNotMatch(resourceEditSource, new RegExp(field))
+    assert.doesNotMatch(resourceDialogSource, new RegExp(field))
+    assert.doesNotMatch(runtimeSource, new RegExp(field))
+  }
+
+  assert.match(resourceDialogSource, />数据安全等级/)
+  assert.match(resourceDialogSource, />数据类型/)
+  assert.match(resourceDialogSource, />数据粒度/)
+  assert.match(runtimeSource, /"dataSecurityLevel"/)
+  assert.match(runtimeSource, /"dataType"/)
+  assert.match(runtimeSource, /"dataGranularity"/)
 })

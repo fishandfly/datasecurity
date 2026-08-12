@@ -356,7 +356,7 @@ export function SecurityGovernanceDetailPage() {
     ['overview', '基本信息'],
     ['resourceFields', '资源字段'],
     ['physicalTable', '接入规则'],
-    ['apiInfo', 'API 信息'],
+    ['apiInfo', '服务通道'],
     ['accessSubjects', '数据应用'],
     ['accessPolicies', '访问策略'],
     ['homomorphic', '同态加密'],
@@ -694,7 +694,7 @@ export function SecurityGovernanceDetailPage() {
 
       {activeTab === 'apiInfo' ? (
         <section className="rounded-[22px] border border-[var(--surface-outline)] bg-[linear-gradient(180deg,var(--surface-raised-strong),var(--surface-muted))] p-5 shadow-[var(--shadow-soft)]">
-          <SectionHeader icon={<DatabaseZap className="h-5 w-5" />} title="API 信息" />
+          <SectionHeader icon={<DatabaseZap className="h-5 w-5" />} title="服务通道" />
           <div className="mt-5">
             <ResourceApisPanel
               resourceId={String(item.id)}
@@ -760,7 +760,7 @@ export function SecurityGovernanceDetailPage() {
             onSaved={async () => {
               await refresh()
               await ensureDefaultSecurityApi(item.id).catch(() => undefined)
-              setEditNotice('数据资源已保存，详情信息和唯一查询 API 已重新同步。')
+              setEditNotice('数据资源已保存，详情信息和查询服务通道已重新同步。')
             }}
           />
           <ResourceIngestValidationDialog

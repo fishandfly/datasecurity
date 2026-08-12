@@ -98,7 +98,7 @@ test('安全管控详情页使用 tab 展示并将当前 tab 写入 URL', () => 
   assert.match(detailPageSource, /\['overview', '基本信息'\]/)
   assert.match(detailPageSource, /\['resourceFields', '资源字段'\]/)
   assert.match(detailPageSource, /\['physicalTable', '接入规则'\]/)
-  assert.match(detailPageSource, /\['apiInfo', 'API 信息'\]/)
+  assert.match(detailPageSource, /\['apiInfo', '服务通道'\]/)
   assert.match(detailPageSource, /\['accessSubjects', '数据应用'\]/)
   assert.match(detailPageSource, /\['accessPolicies', '访问策略'\]/)
   assert.match(detailPageSource, /\['homomorphic', '同态加密'\]/)
@@ -170,14 +170,14 @@ test('资源详情按真实关系聚合 API、数据源、接入安全和运行�
   assert.match(detailPageSource, /最近接入规则执行日志/)
 })
 
-test('每个数据资源自动生成唯一 API 并只管理上下线', () => {
+test('每个数据资源自动生成唯一服务通道并只管理上下线', () => {
   assert.match(detailPageSource, /<ResourceApisPanel/)
   assert.match(resourceApisPanelSource, /ensureDefaultSecurityApi\(resourceId\)/)
   assert.match(resourceApisPanelSource, /listSecurityV3Records\('security_api_resources'/)
   assert.match(resourceApisPanelSource, /publishSecurityApi/)
   assert.match(resourceApisPanelSource, /unpublishSecurityApi/)
   assert.doesNotMatch(resourceApisPanelSource, /SecurityV3CollectionPage/)
-  assert.match(resourceApisPanelSource, /API 访问地址/)
+  assert.match(resourceApisPanelSource, /查询服务地址/)
   assert.match(resourceApisPanelSource, /请求参数说明/)
   assert.match(resourceApisPanelSource, /访问鉴权/)
   assert.match(resourceApisPanelSource, /访问示例代码/)

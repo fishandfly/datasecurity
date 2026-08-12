@@ -91,8 +91,8 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
         allowed_api_codes_json: allowedApiCodes,
       })
       setNotice(action === 'grant'
-        ? `已授权 ${String(subject.subject_name || subject.subject_code || '')} 访问当前资源 API。`
-        : `已取消 ${String(subject.subject_name || subject.subject_code || '')} 对当前资源 API 的授权。`)
+        ? `已授权 ${String(subject.subject_name || subject.subject_code || '')} 访问当前资源服务通道。`
+        : `已取消 ${String(subject.subject_name || subject.subject_code || '')} 对当前资源服务通道的授权。`)
       setSelectedSubjectId('')
       setPendingRevokeId('')
       await load()
@@ -120,7 +120,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
   if (!api) {
     return (
       <div className="rounded-[14px] border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-4 py-5 text-[0.875rem] leading-7 text-[var(--status-warning-text)]">
-        {error || '当前数据资源尚未生成唯一查询 API，请先完整维护基准物理表和资源字段。'}
+        {error || '当前数据资源尚未生成服务通道，请先完整维护基准物理表和资源字段。'}
       </div>
     )
   }
@@ -128,7 +128,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
   return (
     <div className="space-y-4">
       <div className="rounded-[12px] border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-4 py-3 text-[0.8125rem] leading-6 text-[var(--status-info-text)]">
-        此处维护数据应用对当前资源唯一 API <span className="font-mono font-semibold">{apiCode}</span> 的授权。授权后仍需存在已发布且场景匹配的访问策略，请求才会被放行。
+        此处维护数据应用对当前资源服务通道 <span className="font-mono font-semibold">{apiCode}</span> 的授权。授权后仍需存在已发布且场景匹配的访问策略，请求或订阅才会被放行。
       </div>
 
       {error ? <div className="rounded-[10px] border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-3 text-[0.8125rem] text-[var(--status-danger-text)]">{error}</div> : null}
@@ -191,7 +191,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
                     <td className="px-4 py-3.5 font-medium text-[var(--text-main)]">{String(subject.subject_name || '-')}</td>
                     <td className="px-4 py-3.5 text-[var(--text-secondary)]">{formatSecurityV3Value(subject.subject_type)}</td>
                     <td className="px-4 py-3.5 text-[var(--text-secondary)]">{String(subject.organization_name || subject.organization_code || '-')}</td>
-                    <td className="px-4 py-3.5"><span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-2.5 py-1 text-[0.75rem] text-[var(--status-info-text)]"><ShieldCheck className="h-3.5 w-3.5" />{globalAuthorization ? '全部 API' : '当前资源 API'}</span></td>
+                    <td className="px-4 py-3.5"><span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-2.5 py-1 text-[0.75rem] text-[var(--status-info-text)]"><ShieldCheck className="h-3.5 w-3.5" />{globalAuthorization ? '全部服务通道' : '当前资源通道'}</span></td>
                     <td className="px-4 py-3.5"><span className={cn('inline-flex rounded-full border px-2.5 py-1 text-[0.75rem]', statusTone(subject.subject_status))}>{formatSecurityV3Value(subject.subject_status)}</span></td>
                     <td className="px-4 py-3.5">
                       {canManage ? (
@@ -199,7 +199,7 @@ export function ResourceAccessSubjectsPanel({ resourceId, canManage }: ResourceA
                           <button
                             type="button"
                             disabled={isActing || globalAuthorization}
-                            title={globalAuthorization ? '该主体使用全部 API 授权，请在数据应用页面调整' : confirmingRevoke ? '再次点击确认取消授权' : '取消当前资源 API 授权'}
+                            title={globalAuthorization ? '该主体使用全部服务通道授权，请在数据应用页面调整' : confirmingRevoke ? '再次点击确认取消授权' : '取消当前资源服务通道授权'}
                             onClick={() => revoke(subject)}
                             className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 text-[0.75rem] font-medium text-[var(--status-danger-text)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
                           >

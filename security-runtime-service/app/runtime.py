@@ -78,6 +78,8 @@ DENIALS = {
     "QUERY_RANGE_EXCEEDED": (422, "查询范围超过授权限制", 60),
     "ROW_LIMIT_EXCEEDED": (422, "请求数据量超过授权限制", 70),
     "OFF_HOURS": (403, "当前时间不在允许访问时段内", 70),
+    "REGION_REQUIRED": (400, "当前访问策略要求传入 regionCode", 80),
+    "REGION_FILTER_UNAVAILABLE": (403, "当前 API 未配置可执行的区域过滤", 90),
     "SCOPE_VIOLATION": (403, "请求的数据范围不在授权范围内", 80),
     "RATE_LIMITED": (429, "调用频率超过授权限制", 70),
     "VALIDATION_ERROR": (400, "请求参数不符合要求", 60),
@@ -518,8 +520,8 @@ def build_resource_label_snapshot(resource_id: object, snapshot_version: str) ->
     ) or {}
     fields = fetch_all(
         """
-        SELECT field_code, security_level, field_tags, required_desensitization,
-               important_field_flag
+        SELECT field_code, security_level, classification_level, information_category,
+               field_tags, required_desensitization, important_field_flag
         FROM eco_resource_security_fields
         WHERE resource_id=%(resource_id)s
         ORDER BY seq ASC NULLS LAST, id ASC
@@ -527,7 +529,17 @@ def build_resource_label_snapshot(resource_id: object, snapshot_version: str) ->
         {"resource_id": resource_id},
     )
 
-    tags = _normalized_tags(resource.get("tags"), resource.get("resource_tags"), profile.get("security_tags"))
+    metadata_tags = []
+    metadata_labels = {
+        "realtime": "实时", "minute": "分钟级", "quarter_hour": "十五分钟级", "hour": "小时级", "day": "日级",
+    }
+    for key in ("measurement_type", "data_granularity"):
+        value = str(resource.get(key) or "").strip()
+        if value:
+            metadata_tags.append(metadata_labels.get(value, value))
+    if resource.get("security_level"):
+        metadata_tags.append(f"{resource.get('security_level')}级数据")
+    tags = _normalized_tags(resource.get("tags"), resource.get("resource_tags"), profile.get("security_tags"), metadata_tags)
     derived_tags = []
     flag_tags = (
         ("important_data_flag", "重要数据"),
@@ -554,7 +566,7 @@ def build_resource_label_snapshot(resource_id: object, snapshot_version: str) ->
         code = str(field.get("field_code") or "").strip().upper()
         if not code:
             continue
-        current_tags = _normalized_tags(field.get("field_tags"))
+        current_tags = _normalized_tags(field.get("field_tags"), field.get("information_category"), field.get("classification_level"))
         level = str(field.get("security_level") or "").strip().lower()
         if level:
             levels.append(level)
@@ -598,6 +610,9 @@ def build_resource_label_snapshot(resource_id: object, snapshot_version: str) ->
             "securityCategoryId": profile.get("security_category_id"),
             "securityLevelId": profile.get("security_level_id"),
             "dataSubjectTypeId": profile.get("data_subject_type_id"),
+            "dataSecurityLevel": str(resource.get("security_level") or ""),
+            "dataType": str(resource.get("measurement_type") or ""),
+            "dataGranularity": str(resource.get("data_granularity") or ""),
         },
     }
 
@@ -797,6 +812,10 @@ def build_resource_runtime_config(api: dict[str, Any]) -> tuple[dict[str, Any], 
             continue
         if scale_value != 1:
             scales[str(code).strip().upper()] = scale_value
+    region_field_code = configured_or_detect("regionFieldCode", "region_field_code", ("REGION",))
+    effective_query_parameters = list(query_parameters)
+    if region_field_code and not query_sql and "regionCode" not in effective_query_parameters:
+        effective_query_parameters.append("regionCode")
     return {
         "version": 1,
         "dialect": dialect,
@@ -806,10 +825,9 @@ def build_resource_runtime_config(api: dict[str, Any]) -> tuple[dict[str, Any], 
         "maskFields": mask_fields,
         "scales": scales,
         "timeFieldCode": configured_or_detect("timeFieldCode", "time_field_code", ("TIME", "DATE")),
-        "regionFieldCode": configured_or_detect("regionFieldCode", "region_field_code", ("REGION",)),
-        "organizationFieldCode": configured_or_detect("organizationFieldCode", "organization_field_code", ("ORGANIZATION", "ORG_CODE")),
+        "regionFieldCode": region_field_code,
         "querySql": query_sql,
-        "queryParams": query_parameters,
+        "queryParams": effective_query_parameters,
         "defaultParams": default_params,
     }, int(source_id)
 
@@ -1261,6 +1279,7 @@ def preview_resource_latest_rows(resource_id: int, limit: int = 10) -> dict[str,
 
 
 def load_api(path: str, method: str) -> dict[str, Any] | None:
+    gateway_path = path[:-10] if path.endswith("/subscribe") else path
     return fetch_one(
         """
         SELECT * FROM security_api_resources
@@ -1268,7 +1287,7 @@ def load_api(path: str, method: str) -> dict[str, Any] | None:
           AND api_status = 'enabled' AND publish_status = 'success'
         LIMIT 1
         """,
-        {"path": path, "method": method.upper()},
+        {"path": gateway_path, "method": method.upper()},
     )
 
 
@@ -1507,24 +1526,26 @@ def authorize(request, body: bytes) -> RuntimeContext:
     if should_deny:
         raise policy_denied("QUERY_RANGE_EXCEEDED", risk_points)
 
-    region = effective_param("regionCode")
-    organization = effective_param("organizationCode")
-    scope_violation = bool(
-        region and _json_list(policy.get("region_scope_json"))
-        and region not in _json_list(policy.get("region_scope_json"))
-    ) or bool(
-        organization and _json_list(policy.get("organization_scope_json"))
-        and organization not in _json_list(policy.get("organization_scope_json"))
-    )
+    policy_regions = [str(item).strip() for item in _json_list(policy.get("region_scope_json")) if str(item).strip()]
+    region = str(request.query_params.get("regionCode") or "").strip()
+    runtime_config = _json_object(api.get("runtime_config_json"))
+    region_field_code = str(runtime_config.get("regionFieldCode") or runtime_config.get("region_field_code") or "").strip()
+    processing_path = str(api.get("orchestrator_path") or "")
+    if policy_regions and not region:
+        add_risk_factor("regionRequired", "缺少区域参数", 80, "策略配置了区域范围，请求必须显式传入 regionCode")
+        raise policy_denied("REGION_REQUIRED", 80)
+    if policy_regions and processing_path == "/internal/resource-query" and not region_field_code:
+        add_risk_factor("regionFilter", "区域过滤不可用", 90, "策略配置了区域范围，但 API 未映射区域字段")
+        raise policy_denied("REGION_FILTER_UNAVAILABLE", 90)
+    scope_violation = bool(policy_regions and region not in policy_regions)
     should_deny, risk_points = violation_risk(policy, "scopeViolation", scope_violation)
     extra_risk += risk_points
     if risk_points:
-        add_risk_factor("scopeViolation", "数据范围越界", risk_points, "请求的区域或组织不在授权范围内")
+        add_risk_factor("scopeViolation", "区域范围越界", risk_points, "请求的区域不在策略授权范围内")
     if should_deny:
         raise policy_denied("SCOPE_VIOLATION", risk_points)
     fields = effective_param("fields")
     requested_codes: list[str] = []
-    runtime_config = _json_object(api.get("runtime_config_json"))
     runtime_field_map = _json_object(runtime_config.get("fieldMap") or runtime_config.get("field_map"))
     requested_fields = [item.strip() for item in str(fields or "").split(",") if item.strip()]
     if not requested_fields and runtime_field_map:
@@ -1954,7 +1975,6 @@ def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]
     parameters: dict[str, Any] = {}
     time_code = str(config.get("timeFieldCode") or config.get("time_field_code") or "").upper()
     region_code = str(config.get("regionFieldCode") or config.get("region_field_code") or "").upper()
-    organization_code = str(config.get("organizationFieldCode") or config.get("organization_field_code") or "").upper()
     start_at = _parse_time(str(params.get("startAt") or ""))
     end_at = _parse_time(str(params.get("endAt") or ""))
     if time_code:
@@ -1967,17 +1987,16 @@ def resource_query(params, context: RuntimeContext) -> tuple[list[dict[str, Any]
             conditions.extend([f"{time_column} >= %(start_at)s", f"{time_column} < %(end_at)s"])
             parameters.update({"start_at": start_at, "end_at": end_at})
     region = str(params.get("regionCode") or "").strip()
+    policy_regions = _json_list(context.policy.get("region_scope_json"))
+    if policy_regions and not region:
+        raise RuntimeDenied("REGION_REQUIRED", request_id=context.request_id, api=context.api, subject=context.subject, policy=context.policy, client_ip=context.client_ip)
+    if policy_regions and not region_code:
+        raise RuntimeDenied("REGION_FILTER_UNAVAILABLE", request_id=context.request_id, api=context.api, subject=context.subject, policy=context.policy, client_ip=context.client_ip)
     if region and region_code:
         if region_code not in field_map:
             raise ValueError("VALIDATION_ERROR")
         conditions.append(f"{_quote_identifier(field_map[region_code], dialect)} = %(region)s")
         parameters["region"] = region
-    organization = str(params.get("organizationCode") or "").strip()
-    if organization and organization_code:
-        if organization_code not in field_map:
-            raise ValueError("VALIDATION_ERROR")
-        conditions.append(f"{_quote_identifier(field_map[organization_code], dialect)} = %(organization)s")
-        parameters["organization"] = organization
 
     page = max(1, int(params.get("page") or 1))
     page_size = min(max(1, int(params.get("pageSize") or 100)), int(context.policy.get("max_rows") or 1000), 1000)
@@ -2184,7 +2203,6 @@ def detail_measurements(params, context: RuntimeContext) -> tuple[list[dict[str,
 
 def _legacy_detail_measurements(params, context: RuntimeContext) -> tuple[list[dict[str, Any]], dict[str, int]]:
     region, start_at, end_at = _validate_range(params, context)
-    organization = str(params.get("organizationCode") or "").strip()
     mode = context.output_mode
     if mode not in {"detail", "masked"}:
         raise PermissionError("POLICY_NOT_FOUND")
@@ -2206,21 +2224,16 @@ def _legacy_detail_measurements(params, context: RuntimeContext) -> tuple[list[d
     statement = sql.SQL(
         "SELECT {columns} FROM measurement_demo.active_power_measurements "
         "WHERE region_code = %(region)s "
-        "{organization_filter} "
         "AND measurement_time >= %(start_at)s AND measurement_time < %(end_at)s "
         "ORDER BY measurement_time, point_code LIMIT %(limit)s OFFSET %(offset)s"
     ).format(
         columns=columns,
-        organization_filter=sql.SQL("AND organization_code = %(organization)s")
-        if organization
-        else sql.SQL(""),
     )
     with measurement_connection(context) as current, current.cursor() as cursor:
         cursor.execute(
             statement,
             {
                 "region": region,
-                "organization": organization,
                 "start_at": start_at,
                 "end_at": end_at,
                 "limit": page_size,
@@ -2246,7 +2259,6 @@ def _archive_detail_measurements(
     archive: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     region, start_at, end_at = _validate_range(params, context)
-    organization = str(params.get("organizationCode") or "").strip()
     mode = context.output_mode
     if mode not in {"detail", "masked"}:
         raise PermissionError("POLICY_NOT_FOUND")
@@ -2282,10 +2294,6 @@ def _archive_detail_measurements(
     }
     time_column = _quote_identifier(field_map[time_code], dialect)
     conditions.extend([f"{time_column} >= %(start_at)s", f"{time_column} < %(end_at)s"])
-    org_code = archive["organizationFieldCode"]
-    if organization and org_code and org_code in field_map:
-        conditions.append(f"{_quote_identifier(field_map[org_code], dialect)} = %(organization)s")
-        parameters["organization"] = organization
     order: list[str] = []
     order.append(time_column)
     point_code = archive["pointFieldCode"]
@@ -2471,23 +2479,17 @@ def _legacy_region_hourly_values(
     context: RuntimeContext,
 ) -> list[Any]:
     region, start_at, end_at = _validate_range(params, context)
-    organization = str(params.get("organizationCode") or "").strip()
     statement = sql.SQL(
         "SELECT active_power FROM measurement_demo.active_power_measurements "
-        "WHERE region_code=%(region)s {organization_filter} "
+        "WHERE region_code=%(region)s "
         "AND measurement_time >= %(start_at)s AND measurement_time < %(end_at)s "
         "ORDER BY measurement_time, point_code LIMIT 65"
-    ).format(
-        organization_filter=sql.SQL("AND organization_code=%(organization)s")
-        if organization
-        else sql.SQL(""),
     )
     with measurement_connection(context) as current, current.cursor() as cursor:
         cursor.execute(
             statement,
             {
                 "region": region,
-                "organization": organization,
                 "start_at": start_at,
                 "end_at": end_at,
             },
@@ -2507,10 +2509,8 @@ def _read_archive_values(
         raise _homomorphic_denied("FIELD_NOT_ALLOWED", context)
     time_code = archive["timeFieldCode"]
     region_code = archive["regionFieldCode"]
-    org_code = archive["organizationFieldCode"]
     if not time_code or time_code not in field_map or not region_code or region_code not in field_map:
         raise _homomorphic_denied("VALIDATION_ERROR", context)
-    organization = str(params.get("organizationCode") or "").strip()
     dialect = _archive_dialect(context)
     quoted_table = _quote_identifier(archive["table"], dialect)
     value_column = _quote_identifier(field_map[field_code], dialect)
@@ -2522,9 +2522,6 @@ def _read_archive_values(
         f"{time_column} < %(end_at)s",
     ]
     parameters: dict[str, Any] = {"region": region, "start_at": start_at, "end_at": end_at}
-    if organization and org_code and org_code in field_map:
-        conditions.append(f"{_quote_identifier(field_map[org_code], dialect)} = %(organization)s")
-        parameters["organization"] = organization
     order = [time_column]
     point_code = archive["pointFieldCode"]
     if point_code and point_code in field_map:
@@ -3027,6 +3024,35 @@ async def execute_data_api(request, context: RuntimeContext) -> tuple[Any, int]:
     raise _context_denied("ROUTE_NOT_FOUND", context)
 
 
+STREAM_CHANNEL_TYPES = {"stream_subscription", "topic_consumer"}
+STREAM_SUBSCRIPTION_MODES = {"push", "pull", "batch"}
+
+
+def open_stream_subscription(context: RuntimeContext) -> dict[str, Any]:
+    """签发受控订阅租约，不在本地伪造或转发流式消息。"""
+    channel_type = str(context.api.get("channel_type") or "query_service")
+    if channel_type not in STREAM_CHANNEL_TYPES:
+        raise _context_denied("ROUTE_NOT_FOUND", context)
+    topic_name = str(context.api.get("topic_name") or "").strip()
+    consumer_group = str(context.api.get("consumer_group") or "").strip()
+    subscription_mode = str(context.api.get("subscription_mode") or "").strip()
+    if not topic_name or not consumer_group or subscription_mode not in STREAM_SUBSCRIPTION_MODES:
+        raise _context_denied("VALIDATION_ERROR", context)
+    return {
+        "requestId": context.request_id,
+        "channelCode": str(context.api.get("api_code") or ""),
+        "channelName": str(context.api.get("api_name") or ""),
+        "channelType": channel_type,
+        "topicName": topic_name,
+        "consumerGroup": consumer_group,
+        "subscriptionMode": subscription_mode,
+        "decision": "allow",
+        "outputMode": context.output_mode,
+        "leaseSeconds": 300,
+        "message": "订阅授权已签发；实际消息由已接入的数据中台适配器按此授权建立受控消费。",
+    }
+
+
 def record_allowed(context: RuntimeContext, returned_rows: int, duration_ms: int) -> None:
     now = datetime.now(timezone.utc)
     snapshot = context.security_snapshot or runtime_security_snapshot(context.policy, context.api)
@@ -3186,9 +3212,26 @@ SUPPORTED_ORCHESTRATOR_PATHS = {
 
 def validate_api(api: dict[str, Any]) -> list[str]:
     errors = []
-    if not str(api.get("gateway_path") or "").startswith("/data-api/"):
-        errors.append("发布路径必须以 /data-api/ 开头")
-    if str(api.get("http_method") or "").upper() not in {"GET", "POST"}:
+    channel_type = str(api.get("channel_type") or "query_service")
+    gateway_path = str(api.get("gateway_path") or "")
+    method = str(api.get("http_method") or "").upper()
+    if channel_type in STREAM_CHANNEL_TYPES:
+        if not gateway_path.startswith("/data-stream/"):
+            errors.append("流式通道地址必须以 /data-stream/ 开头")
+        if method != "POST":
+            errors.append("流式通道的订阅授权方法必须为 POST")
+        if not str(api.get("topic_name") or "").strip():
+            errors.append("流式通道必须配置流式主题")
+        if not str(api.get("consumer_group") or "").strip():
+            errors.append("流式通道必须配置消费组")
+        if str(api.get("subscription_mode") or "") not in STREAM_SUBSCRIPTION_MODES:
+            errors.append("流式通道必须配置推送、拉取或批量订阅模式")
+        return errors
+    if channel_type != "query_service":
+        return ["通道类型不受支持"]
+    if not gateway_path.startswith("/data-api/"):
+        errors.append("查询服务地址必须以 /data-api/ 开头")
+    if method not in {"GET", "POST"}:
         errors.append("请求方法只支持 GET 或 POST")
     mode = str(api.get("access_mode") or "")
     if mode == "direct" and not str(api.get("upstream_url") or "").startswith(("http://", "https://")):
@@ -3203,11 +3246,12 @@ def validate_api(api: dict[str, Any]) -> list[str]:
 def publish_api(api_id: int) -> dict[str, Any]:
     api = fetch_one("SELECT * FROM security_api_resources WHERE id = %(id)s", {"id": api_id})
     if not api:
-        raise LookupError("API 资源不存在")
+        raise LookupError("数据服务通道不存在")
     errors = validate_api(api)
     runtime_config = _json_object(api.get("runtime_config_json"))
     source_id = api.get("data_source_id")
-    if str(api.get("access_mode") or "") in {"develop", "orchestrate"} and str(api.get("orchestrator_path") or "") not in {
+    is_stream_channel = str(api.get("channel_type") or "query_service") in STREAM_CHANNEL_TYPES
+    if not is_stream_channel and str(api.get("access_mode") or "") in {"develop", "orchestrate"} and str(api.get("orchestrator_path") or "") not in {
         "/internal/active-power", "/internal/region-hourly", "/internal/push/switch-event", "/internal/model/line-relation",
     }:
         try:
@@ -3260,6 +3304,12 @@ def ensure_resource_api(resource_id: int) -> dict[str, Any]:
         "SELECT * FROM security_api_resources WHERE resource_id=%(resource_id)s ORDER BY id ASC LIMIT 1",
         {"resource_id": resource_id},
     )
+    if existing and str(existing.get("channel_type") or "query_service") in STREAM_CHANNEL_TYPES:
+        return {
+            "id": int(existing["id"]),
+            "created": False,
+            "publishStatus": existing.get("publish_status"),
+        }
     draft_api = {
         **(existing or {}),
         "resource_id": resource_id,
@@ -3282,13 +3332,13 @@ def ensure_resource_api(resource_id: int) -> dict[str, Any]:
         row = fetch_one(
             """
             INSERT INTO security_api_resources (
-              api_code, api_name, access_mode, http_method, upstream_url, orchestrator_path,
+              api_code, api_name, channel_type, access_mode, http_method, upstream_url, orchestrator_path,
               gateway_path, protection_level, supports_row_filter, supports_field_filter,
               supports_aggregate, supports_homomorphic, api_status, publish_version,
               publish_status, publish_error, resource_id, data_source_id, runtime_config_json,
               "createdAt", "updatedAt"
             ) VALUES (
-              %(api_code)s, %(api_name)s, 'develop', 'GET', NULL, '/internal/resource-query',
+              %(api_code)s, %(api_name)s, 'query_service', 'develop', 'GET', NULL, '/internal/resource-query',
               %(gateway_path)s, %(protection_level)s, true, true, false, %(supports_homomorphic)s, 'draft', 0,
               'unpublished', NULL, %(resource_id)s, %(data_source_id)s, %(runtime_config)s::jsonb,
               %(now)s, %(now)s
@@ -3309,7 +3359,7 @@ def ensure_resource_api(resource_id: int) -> dict[str, Any]:
         fetch_one(
             """
             UPDATE security_api_resources
-            SET api_code=%(api_code)s, api_name=%(api_name)s, access_mode='develop', http_method='GET',
+            SET api_code=%(api_code)s, api_name=%(api_name)s, channel_type='query_service', access_mode='develop', http_method='GET',
                 upstream_url=NULL, orchestrator_path='/internal/resource-query', gateway_path=%(gateway_path)s,
                 data_source_id=%(data_source_id)s, runtime_config_json=%(runtime_config)s::jsonb,
                 protection_level=%(protection_level)s, supports_homomorphic=%(supports_homomorphic)s,
@@ -3350,7 +3400,8 @@ def publish_policy(policy_id: int) -> dict[str, Any]:
     policy = fetch_one(
         """
         SELECT policy.*, subject.subject_status, subject.allowed_api_codes_json,
-               api.api_code, api.api_status, api.publish_status AS api_publish_status
+               api.api_code, api.api_status, api.publish_status AS api_publish_status,
+               api.orchestrator_path, api.runtime_config_json
         FROM eco_resource_security_policies policy
         LEFT JOIN security_access_subjects subject ON subject.id = policy.subject_id
         LEFT JOIN security_api_resources api ON api.id = policy.api_resource_id
@@ -3386,6 +3437,16 @@ def publish_policy(policy_id: int) -> dict[str, Any]:
         errors.append("最大查询天数必须在 1 到 31 之间")
     if not 1 <= int(policy.get("max_rows") or 0) <= 100000:
         errors.append("最大返回行数必须在 1 到 100000 之间")
+    policy_regions = [str(item).strip() for item in _json_list(policy.get("region_scope_json")) if str(item).strip()]
+    if policy_regions:
+        api_config = _json_object(policy.get("runtime_config_json"))
+        processing_path = str(policy.get("orchestrator_path") or "")
+        region_field_code = str(api_config.get("regionFieldCode") or api_config.get("region_field_code") or "").strip()
+        query_sql, query_parameters = validate_custom_query_sql(api_config.get("querySql") or api_config.get("query_sql"))
+        if processing_path == "/internal/resource-query" and not region_field_code:
+            errors.append("区域范围已配置，但 API 未映射区域字段")
+        if processing_path == "/internal/resource-query" and query_sql and "regionCode" not in query_parameters:
+            errors.append("区域范围已配置，自定义 SQL 必须引用 :regionCode")
     rules = _json_object(policy.get("abnormal_access_rules_json"))
     for rule_name in DEFAULT_ABNORMAL_ACCESS_RULES:
         rule = rules.get(rule_name)

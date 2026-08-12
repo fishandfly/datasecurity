@@ -25,7 +25,7 @@ type SecurityModuleTab = {
 const moduleTabs: Record<SecurityModuleId, SecurityModuleTab[]> = {
   resources: [],
   services: [
-    { label: 'API 资源', path: '/security-governance/resources/apis', icon: Braces },
+    { label: '数据服务通道', path: '/security-governance/resources/apis', icon: Braces },
   ],
   ingest: [
     { label: '数据源', path: '/security-governance/ingest/sources', icon: Database },

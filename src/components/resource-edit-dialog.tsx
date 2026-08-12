@@ -281,6 +281,20 @@ export function ResourceEditDialog({
                         <option value="l3">跨域密态层</option>
                       </select>
                     </label>
+                    <label className="space-y-2">
+                      <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">数据安全等级 <span className="text-[var(--status-danger-text)]">*</span></div>
+                      <select value={form.securityLevel} onChange={(event) => updateField('securityLevel', event.target.value)} className={DIALOG_INPUT_CLASS}>
+                        <option value="1">1 级：一般可开放</option><option value="2">2 级：条件开放</option><option value="3">3 级：条件共享</option><option value="4">4 级：高风险不共享</option>
+                      </select>
+                    </label>
+                  </section>
+
+                  <section className="space-y-4 rounded-2xl border border-[var(--dialog-panel-border)] bg-[linear-gradient(180deg,var(--dialog-panel-bg-start),var(--dialog-panel-bg-end))] p-4">
+                    <div><div className="text-[0.9375rem] font-semibold text-[var(--text-main)]">量测元数据</div><div className="mt-1 text-[0.75rem] leading-6 text-[var(--text-muted)]">用于标签补全、分类分级和分层策略判断。</div></div>
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <label className="space-y-2"><div className="text-[0.8125rem] text-[var(--text-secondary)]">数据类型</div><input value={form.measurementType} onChange={(event) => updateField('measurementType', event.target.value)} className={DIALOG_INPUT_CLASS} placeholder="例如低频电压、区域负荷" /></label>
+                      <label className="space-y-2"><div className="text-[0.8125rem] text-[var(--text-secondary)]">数据粒度</div><select value={form.dataGranularity} onChange={(event) => updateField('dataGranularity', event.target.value)} className={DIALOG_INPUT_CLASS}><option value="realtime">实时</option><option value="minute">分钟级</option><option value="quarter_hour">十五分钟级</option><option value="hour">小时级</option><option value="day">日级</option></select></label>
+                    </div>
                   </section>
 
                   <label className="block space-y-2 rounded-2xl border border-[var(--dialog-panel-border)] bg-[linear-gradient(180deg,var(--dialog-panel-bg-start),var(--dialog-panel-bg-end))] p-4">
@@ -318,7 +332,7 @@ export function ResourceEditDialog({
                   <section className="space-y-4 rounded-2xl border border-[var(--dialog-panel-border)] bg-[linear-gradient(180deg,var(--dialog-panel-bg-start),var(--dialog-panel-bg-end))] p-4">
                     <div>
                       <div className="text-[0.9375rem] font-semibold text-[var(--text-main)]">数据查询与 API 参数</div>
-                      <div className="mt-1 text-[0.75rem] leading-6 text-[var(--text-muted)]">系统会根据资源和字段自动生成唯一查询 API。自定义 SQL 仅允许单条 SELECT，参数使用 :paramName 占位符。</div>
+                      <div className="mt-1 text-[0.75rem] leading-6 text-[var(--text-muted)]">系统会根据资源和字段自动生成查询服务通道。自定义 SQL 仅允许单条 SELECT，参数使用 :paramName 占位符。</div>
                     </div>
                     <label className="block space-y-2">
                       <div className="text-[0.8125rem] font-semibold text-[var(--text-secondary)]">基准物理表 <span className="text-[var(--status-danger-text)]">*</span></div>
